@@ -9,7 +9,7 @@ from requests_html import HTMLSession
 import threading
 import logging
 import backoff
-
+import functools
 import time
 
 pd.set_option("future.no_silent_downcasting", True)
@@ -21,49 +21,84 @@ class EmptyDataRetryException(Exception):
     pass
 
 
-def create_yahoo_retry_decorator(max_tries=8, max_time=300, base_delay=1.3):
+def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=1.3):
     """Create a Yahoo API retry decorator using backoff library."""
 
     def decorator(func):
+        @functools.wraps(func)  # ✅ This preserves the original function name
         def wrapped_func(*args, **kwargs):
             # Add a small delay before each request to be nice to Yahoo
             time.sleep(base_delay)
 
-            result = func(*args, **kwargs)
+            # Extract ticker context for better logging
+            ticker = None
+            if args and hasattr(args[0], '__class__'):
+                # If called as a method, args[0] is self
+                if len(args) > 1:
+                    ticker = args[1]  # Second arg is usually ticker
+            elif args:
+                ticker = args[0]  # First arg might be ticker
 
-            # Check if result is an empty DataFrame - raise exception to trigger retry
-            if isinstance(result, pd.DataFrame) and result.empty:
-                raise EmptyDataRetryException(
-                    f"Empty DataFrame returned from {func.__name__}"
-                )
-            return result
+            try:
+                result = func(*args, **kwargs)
+
+                # Check if result is an empty DataFrame - raise exception to trigger retry
+                if isinstance(result, pd.DataFrame) and result.empty:
+                    raise EmptyDataRetryException(
+                        f"Empty DataFrame returned from {func.__name__} for ticker: {ticker}"
+                    )
+                return result
+            except EmptyDataRetryException:
+                # Re-raise to trigger backoff
+                raise
+            except Exception as e:
+                # Handle other exceptions with context
+                raise Exception(f"Error in {func.__name__} for ticker {ticker}: {e}") from e
 
         def backoff_handler(details):
+            # Extract ticker from exception message if available
+            exception_str = str(details['exception'])
+            ticker_match = re.search(r'ticker: (\w+)', exception_str)
+            ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
+
             logging.info(
-                f"Backing off for {details['wait']:.1f}s "
-                f"(attempt {details['tries']}) - {details['exception']}"
+                f"🔄 Retrying {func.__name__}{ticker_info} - "  # ✅ Use original func.__name__
+                f"attempt {details['tries']}/{max_tries}, waiting {details['wait']:.1f}s"
             )
 
         def giveup_handler(details):
-            logging.info(
-                f"Giving up on {details['target'].__name__} after {details['tries']} tries "
-                f"- accepting empty result as potentially valid"
+            # Extract ticker from exception message if available
+            exception_str = str(details['exception'])
+            ticker_match = re.search(r'ticker: (\w+)', exception_str)
+            ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
+
+            logging.warning(
+                f"⚠️ Giving up on {func.__name__}{ticker_info} after {details['tries']} attempts - "  # ✅ Use original func.__name__
+                f"continuing with empty result"
             )
 
-        return backoff.on_exception(
-            backoff.expo,
-            (EmptyDataRetryException,),
-            max_tries=max_tries,
-            max_time=max_time,
-            base=2,
-            max_value=600,
-            jitter=backoff.random_jitter,
-            on_backoff=backoff_handler,
-            on_giveup=giveup_handler,
-        )(wrapped_func)
+        # ✅ Create wrapper that CATCHES the final exception
+        @functools.wraps(func)  # ✅ Preserve function name here too
+        def safe_wrapper(*args, **kwargs):
+            try:
+                return backoff.on_exception(
+                    backoff.expo,
+                    (EmptyDataRetryException,),
+                    max_tries=max_tries,
+                    max_time=max_time,
+                    base=2,
+                    max_value=30,
+                    jitter=backoff.random_jitter,
+                    on_backoff=backoff_handler,
+                    on_giveup=giveup_handler,
+                )(wrapped_func)(*args, **kwargs)
+            except EmptyDataRetryException:
+                # ✅ After all retries failed, return empty DataFrame instead of crashing
+                logging.warning(f"🔄 All retries exhausted for {func.__name__} - returning empty DataFrame")
+                return pd.DataFrame()
+        return safe_wrapper
 
     return decorator
-
 
 yahoo_api_retry = create_yahoo_retry_decorator()
 

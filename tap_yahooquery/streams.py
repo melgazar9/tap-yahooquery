@@ -77,12 +77,21 @@ class SecFilingsStream(YahooQueryStream):
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
-        th.Property("date", th.DateType, required=True),
-        th.Property("epoch_date", th.DateTimeType, required=True),
+        th.Property("date", th.DateType),
+        th.Property("epoch_date", th.DateTimeType),
         th.Property("type", th.StringType),
         th.Property("title", th.StringType),
         th.Property("edgar_url", th.StringType),
-        th.Property("exhibits", th.StringType),
+        th.Property(
+            "exhibits",
+            th.ArrayType(
+                th.ObjectType(
+                    th.Property("type", th.StringType),
+                    th.Property("url", th.StringType),
+                    th.Property("downloadUrl", th.StringType),
+                )
+            ),
+        ),
         th.Property("max_age", th.NumberType),
         th.Property("timestamp_extracted", th.DateTimeType),
     ).to_dict()
@@ -104,6 +113,7 @@ class SecFilingsStream(YahooQueryStream):
 
         self.logger.info(f"Processing SEC filings for ticker: {ticker}")
         df = self._fetch_sec_filings(ticker)
+        df.columns = clean_strings(df.columns)
         for record in df.to_dict(orient="records"):
             yield record
 
