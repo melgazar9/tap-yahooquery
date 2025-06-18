@@ -57,7 +57,7 @@ class YahooQueryStream(Stream, ABC):
             "tickers", {}
         ).get("select_tickers")
 
-        if ticker_list:
+        if ticker_list and ticker_list not in ('*', ['*']):
             ticker_records = ticker_fetcher.fetch_specific_tickers(ticker_list)
             self.logger.info(
                 f"{self.name}: Using specific tickers from config: {ticker_list}"
@@ -99,7 +99,7 @@ class YahooQueryStream(Stream, ABC):
         )
 
         excluded_tickers = [
-            f"{t['ticker']}({t.get('segment', 'unknown')})"
+            f"{t['ticker']} ({t.get('segment', 'unknown')})"
             for t in tickers
             if t not in filtered_tickers
         ]

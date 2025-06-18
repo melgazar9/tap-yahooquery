@@ -45,6 +45,7 @@ rate_limiter = RateLimitManager()
 
 class EmptyDataException(Exception):
     """Raised when data is empty but likely should contain data - triggers retry."""
+
     pass
 
 
@@ -59,7 +60,7 @@ def yahoo_api_retry(func):
         # ✅ Extract ticker for better logging
         ticker = "unknown"
         if args and len(args) > 1:
-            ticker = args[1] if hasattr(args[0], '__class__') else args[0]
+            ticker = args[1] if hasattr(args[0], "__class__") else args[0]
         elif args:
             ticker = args[0]
 
@@ -75,7 +76,9 @@ def yahoo_api_retry(func):
             # ✅ Check for empty data that should exist
             if isinstance(result, pd.DataFrame) and result.empty:
                 # Only retry empty data for valid tickers
-                if isinstance(ticker, str) and not any(x in str(ticker).lower() for x in ['none', 'nan', 'inf']):
+                if isinstance(ticker, str) and not any(
+                    x in str(ticker).lower() for x in ["none", "nan", "inf"]
+                ):
                     raise EmptyDataException(f"Empty data for {ticker} - retrying")
 
             return result
@@ -83,13 +86,21 @@ def yahoo_api_retry(func):
         except EmptyDataException:
             # Re-raise to trigger backoff
             raise
-        except (ConnectionError, RequestException, MaxRetryError, NewConnectionError) as e:
+        except (
+            ConnectionError,
+            RequestException,
+            MaxRetryError,
+            NewConnectionError,
+        ) as e:
             logging.info(f"🔄 Network error for {ticker} - will retry: {e}")
             raise RequestException(f"Network error for {ticker}: {e}")
         except Exception as e:
             # Check if it's a rate limit error from yahooquery
             error_str = str(e).lower()
-            if any(phrase in error_str for phrase in ['rate limit', '429', 'too many requests', 'quota']):
+            if any(
+                phrase in error_str
+                for phrase in ["rate limit", "429", "too many requests", "quota"]
+            ):
                 logging.info(f"🔄 Rate limit detected for {ticker} - will retry")
                 raise RequestException(f"Rate limit for {ticker}: {e}")
             else:
@@ -102,8 +113,8 @@ def yahoo_api_retry(func):
         return isinstance(exception, HTTPError)
 
     def backoff_handler(details):
-        exception_str = str(details['exception'])
-        ticker_match = re.search(r'for (\w+)', exception_str)
+        exception_str = str(details["exception"])
+        ticker_match = re.search(r"for (\w+)", exception_str)
         ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
 
         logging.info(
@@ -112,8 +123,8 @@ def yahoo_api_retry(func):
         )
 
     def giveup_handler(details):
-        exception_str = str(details['exception'])
-        ticker_match = re.search(r'for (\w+)', exception_str)
+        exception_str = str(details["exception"])
+        ticker_match = re.search(r"for (\w+)", exception_str)
         ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
 
         logging.warning(
@@ -125,8 +136,13 @@ def yahoo_api_retry(func):
         try:
             return backoff.on_exception(
                 backoff.expo,
-                (RequestException, ConnectionError, MaxRetryError,
-                 NewConnectionError, EmptyDataException),
+                (
+                    RequestException,
+                    ConnectionError,
+                    MaxRetryError,
+                    NewConnectionError,
+                    EmptyDataException,
+                ),
                 max_tries=5,
                 max_time=300,
                 base=3,
@@ -304,12 +320,14 @@ class TickerFetcher:
                 return "futures_tickers"
             elif "-" in ticker and ticker.endswith("USD"):
                 return "crypto_tickers"
-            elif ticker.isupper() and len(ticker) <= 5:
-                return "stock_tickers"
-            elif ".PVT" in ticker:
-                return "private_companies_tickers"
             elif ticker.startswith("^"):
                 return "world_indices_tickers"
+            elif ".PVT" in ticker:
+                return "private_companies_tickers"
+            elif '.' in ticker and not ticker.startswith('^'):
+                return "foreign_stock_tickers"
+            elif ticker.isupper() and len(ticker) <= 5:
+                return "stock_tickers"
         return "unknown"
 
     @classmethod
