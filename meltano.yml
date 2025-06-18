@@ -28,9 +28,7 @@ plugins:
 
       tickers:
         select_tickers:
-          - "AAPL"
-          - "BTC-USD"
-          - "ES=F"
+          - "*"
 
       sec_filings:
         use_cached_tickers: true
@@ -42,18 +40,3 @@ plugins:
   - name: target-jsonl
     variant: andyh1203
     pip_url: target-jsonl
-
-  - name: target-postgres
-    variant: meltanolabs
-    pip_url: git+https://github.com/MeltanoLabs/target-postgres
-    config:
-      host: ${POSTGRES_HOST}
-      port: ${POSTGRES_PORT}
-      user: ${POSTGRES_USER}
-      password: ${POSTGRES_PASSWORD}
-      dialect: ${POSTGRES_DIALECT}
-      database: financial_elt
-      max_batch_size: 10000
-      load_method: upsert  # for the first run set to append-only --> much faster loading
-      use_copy: true  # Faster bulk loadingcd
-      add_record_metadata: true
