@@ -57,7 +57,7 @@ class YahooQueryStream(Stream, ABC):
             "tickers", {}
         ).get("select_tickers")
 
-        if ticker_list and ticker_list not in ('*', ['*']):
+        if ticker_list and ticker_list not in ("*", ["*"]):
             ticker_records = ticker_fetcher.fetch_specific_tickers(ticker_list)
             self.logger.info(
                 f"{self.name}: Using specific tickers from config: {ticker_list}"
