@@ -12,97 +12,136 @@ import backoff
 import functools
 import time
 
+from requests.exceptions import ConnectionError, HTTPError, RequestException
+from urllib3.exceptions import MaxRetryError, NewConnectionError
+
 pd.set_option("future.no_silent_downcasting", True)
 
 
-class EmptyDataRetryException(Exception):
-    """Raised when data is unexpectedly empty and should be retried."""
+class RateLimitManager:
+    def __init__(self):
+        self.last_request_time = {}
+        self.min_delay = 1.2  # Slightly more conservative for yahooquery
 
+    def wait_if_needed(self, endpoint_name):
+        """Wait if we need to respect rate limits"""
+        now = datetime.now()
+        last_time = self.last_request_time.get(endpoint_name)
+
+        if last_time:
+            time_since_last = (now - last_time).total_seconds()
+            if time_since_last < self.min_delay:
+                sleep_time = self.min_delay - time_since_last
+                logging.info(
+                    f"⏱️ Rate limiting: sleeping {sleep_time:.1f}s for {endpoint_name}"
+                )
+                time.sleep(sleep_time)
+
+        self.last_request_time[endpoint_name] = now
+
+
+rate_limiter = RateLimitManager()
+
+
+class EmptyDataException(Exception):
+    """Raised when data is empty but likely should contain data - triggers retry."""
     pass
 
 
-def create_yahoo_retry_decorator(max_tries=8, max_time=300, base_delay=0.003):
-    """Create a Yahoo API retry decorator using backoff library."""
+def yahoo_api_retry(func):
+    """
+    Enhanced backoff with proper error classification and rate limiting.
+    Adapted from tap-yfinance for yahooquery compatibility.
+    """
 
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapped_func(*args, **kwargs):
-            time.sleep(base_delay)
+    @functools.wraps(func)
+    def wrapped_func(*args, **kwargs):
+        # ✅ Extract ticker for better logging
+        ticker = "unknown"
+        if args and len(args) > 1:
+            ticker = args[1] if hasattr(args[0], '__class__') else args[0]
+        elif args:
+            ticker = args[0]
 
-            # Extract ticker context for better logging
-            ticker = None
-            if args and hasattr(args[0], "__class__"):
-                # If called as a method, args[0] is self
-                if len(args) > 1:
-                    ticker = args[1]
-            elif args:
-                ticker = args[0]
+        # ✅ Apply rate limiting
+        rate_limiter.wait_if_needed(f"{func.__name__}_{ticker}")
 
-            try:
-                result = func(*args, **kwargs)
+        # ✅ Add small base delay to reduce API pressure
+        time.sleep(0.1)
 
-                # Check if result is an empty DataFrame - raise exception to trigger retry
-                if isinstance(result, pd.DataFrame) and result.empty:
-                    raise EmptyDataRetryException(
-                        f"Empty DataFrame returned from {func.__name__} for ticker: {ticker}"
-                    )
-                return result
-            except EmptyDataRetryException:
-                # Re-raise to trigger backoff
-                raise
-            except Exception as e:
-                # Handle other exceptions with context
-                raise Exception(
-                    f"Error in {func.__name__} for ticker {ticker}: {e}"
-                ) from e
+        try:
+            result = func(*args, **kwargs)
 
-        def backoff_handler(details):
-            # Extract ticker from exception message if available
-            exception_str = str(details["exception"])
-            ticker_match = re.search(r"ticker: (\w+)", exception_str)
-            ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
+            # ✅ Check for empty data that should exist
+            if isinstance(result, pd.DataFrame) and result.empty:
+                # Only retry empty data for valid tickers
+                if isinstance(ticker, str) and not any(x in str(ticker).lower() for x in ['none', 'nan', 'inf']):
+                    raise EmptyDataException(f"Empty data for {ticker} - retrying")
 
-            logging.info(
-                f"🔄 Retrying {func.__name__}{ticker_info} - "
-                f"attempt {details['tries']}/{max_tries}, waiting {details['wait']:.1f}s"
-            )
+            return result
 
-        def giveup_handler(details):
-            exception_str = str(details["exception"])
-            ticker_match = re.search(r"ticker: (\w+)", exception_str)
-            ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
+        except EmptyDataException:
+            # Re-raise to trigger backoff
+            raise
+        except (ConnectionError, RequestException, MaxRetryError, NewConnectionError) as e:
+            logging.info(f"🔄 Network error for {ticker} - will retry: {e}")
+            raise RequestException(f"Network error for {ticker}: {e}")
+        except Exception as e:
+            # Check if it's a rate limit error from yahooquery
+            error_str = str(e).lower()
+            if any(phrase in error_str for phrase in ['rate limit', '429', 'too many requests', 'quota']):
+                logging.info(f"🔄 Rate limit detected for {ticker} - will retry")
+                raise RequestException(f"Rate limit for {ticker}: {e}")
+            else:
+                # Log other errors but don't retry
+                logging.warning(f"❌ Non-retryable error for {ticker}: {e}")
+                raise HTTPError(f"Permanent error for {ticker}: {e}")
 
-            logging.warning(
-                f"⚠️ Giving up on {func.__name__}{ticker_info} after {details['tries']} attempts - "
-                f"continuing with empty result"
-            )
+    def giveup_on_permanent_errors(exception):
+        """Give up on permanent errors, retry on rate limits."""
+        return isinstance(exception, HTTPError)
 
-        @functools.wraps(func)
-        def safe_wrapper(*args, **kwargs):
-            try:
-                return backoff.on_exception(
-                    backoff.expo,
-                    (EmptyDataRetryException,),
-                    max_tries=max_tries,
-                    max_time=max_time,
-                    base=2,
-                    max_value=30,
-                    jitter=backoff.random_jitter,
-                    on_backoff=backoff_handler,
-                    on_giveup=giveup_handler,
-                )(wrapped_func)(*args, **kwargs)
-            except EmptyDataRetryException:
-                logging.warning(
-                    f"🔄 All retries exhausted for {func.__name__} - returning empty DataFrame"
-                )
-                return pd.DataFrame()
+    def backoff_handler(details):
+        exception_str = str(details['exception'])
+        ticker_match = re.search(r'for (\w+)', exception_str)
+        ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
 
-        return safe_wrapper
+        logging.info(
+            f"🔄 Retrying {details['target'].__name__}{ticker_info} - "
+            f"attempt {details['tries']}/5, waiting {details['wait']:.1f}s"
+        )
 
-    return decorator
+    def giveup_handler(details):
+        exception_str = str(details['exception'])
+        ticker_match = re.search(r'for (\w+)', exception_str)
+        ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
 
+        logging.warning(
+            f"⚠️ Giving up on {details['target'].__name__}{ticker_info} after {details['tries']} attempts"
+        )
 
-yahoo_api_retry = create_yahoo_retry_decorator()
+    @functools.wraps(func)
+    def safe_wrapper(*args, **kwargs):
+        try:
+            return backoff.on_exception(
+                backoff.expo,
+                (RequestException, ConnectionError, MaxRetryError,
+                 NewConnectionError, EmptyDataException),
+                max_tries=5,
+                max_time=300,
+                base=3,
+                max_value=60,
+                jitter=backoff.full_jitter,
+                giveup=giveup_on_permanent_errors,
+                on_backoff=backoff_handler,
+                on_giveup=giveup_handler,
+            )(wrapped_func)(*args, **kwargs)
+        except (HTTPError, EmptyDataException):
+            # Return empty DataFrame for permanent failures
+            logging.info(f"📄 Returning empty DataFrame for {func.__name__}")
+            return pd.DataFrame()
+
+    return safe_wrapper
 
 
 def clean_strings(lst):
