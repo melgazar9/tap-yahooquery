@@ -10,20 +10,59 @@ import threading
 import logging
 import backoff
 
+import time
+
 pd.set_option("future.no_silent_downcasting", True)
 
 
-def create_yahoo_retry_decorator(max_tries=3, max_time=60):
-    """Create a Yahoo API retry decorator with custom settings."""
-    config = {
-        "wait_gen": backoff.expo,
-        "exception": Exception,
-        "max_tries": max_tries,
-        "max_time": max_time,
-        "jitter": backoff.random_jitter,
-        "logger": logging.getLogger(__name__),
-    }
-    return backoff.on_exception(**config)
+class EmptyDataRetryException(Exception):
+    """Raised when data is unexpectedly empty and should be retried."""
+
+    pass
+
+
+def create_yahoo_retry_decorator(max_tries=8, max_time=300, base_delay=1.3):
+    """Create a Yahoo API retry decorator using backoff library."""
+
+    def decorator(func):
+        def wrapped_func(*args, **kwargs):
+            # Add a small delay before each request to be nice to Yahoo
+            time.sleep(base_delay)
+
+            result = func(*args, **kwargs)
+
+            # Check if result is an empty DataFrame - raise exception to trigger retry
+            if isinstance(result, pd.DataFrame) and result.empty:
+                raise EmptyDataRetryException(
+                    f"Empty DataFrame returned from {func.__name__}"
+                )
+            return result
+
+        def backoff_handler(details):
+            logging.info(
+                f"Backing off for {details['wait']:.1f}s "
+                f"(attempt {details['tries']}) - {details['exception']}"
+            )
+
+        def giveup_handler(details):
+            logging.info(
+                f"Giving up on {details['target'].__name__} after {details['tries']} tries "
+                f"- accepting empty result as potentially valid"
+            )
+
+        return backoff.on_exception(
+            backoff.expo,
+            (EmptyDataRetryException,),
+            max_tries=max_tries,
+            max_time=max_time,
+            base=2,
+            max_value=600,
+            jitter=backoff.random_jitter,
+            on_backoff=backoff_handler,
+            on_giveup=giveup_handler,
+        )(wrapped_func)
+
+    return decorator
 
 
 yahoo_api_retry = create_yahoo_retry_decorator()

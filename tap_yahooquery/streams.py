@@ -88,7 +88,7 @@ class SecFilingsStream(YahooQueryStream):
     ).to_dict()
 
     @yahoo_api_retry
-    def _fetch_sec_filings(self, ticker: str) -> dict:
+    def _fetch_sec_filings(self, ticker: str) -> pd.DataFrame:
         """Fetch SEC filings data with retry protection."""
         ticker_obj = yq.Ticker(ticker)
         return ticker_obj.sec_filings
@@ -140,7 +140,7 @@ class IncomeStmtStream(YahooQueryStream):
             df = df.reset_index().rename(
                 columns={
                     "symbol": "ticker",
-                    "as_of_date": "date",
+                    "asOfDate": "date",
                     "BasicEPS": "basic_eps",
                     "DilutedEPS": "diluted_eps",
                     "NormalizedEBITDA": "normalized_ebitda",
