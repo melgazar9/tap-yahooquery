@@ -29,8 +29,8 @@ plugins:
       tickers:
         select_tickers:
           - "AAPL"
-          - "GOOGL"
-          - "META"
+          - "BTC-USD"
+          - "ES=F"
 
       sec_filings:
         use_cached_tickers: true

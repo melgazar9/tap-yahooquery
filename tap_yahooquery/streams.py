@@ -6,6 +6,7 @@ import typing as t
 from singer_sdk import typing as th
 from singer_sdk.helpers.types import Context
 import pandas as pd
+import yahooquery as yq
 from tap_yahooquery.client import YahooQueryStream
 from tap_yahooquery.schema import INCOME_STMT_SCHEMA
 from tap_yahooquery.helpers import (
@@ -14,7 +15,6 @@ from tap_yahooquery.helpers import (
     fix_empty_values,
     clean_strings,
 )
-import yahooquery as yq
 
 
 class TickersStream(YahooQueryStream):
@@ -61,9 +61,6 @@ class TickersStream(YahooQueryStream):
             ticker_fetcher = TickerFetcher()
             ticker_records = ticker_fetcher.fetch_specific_tickers(selected_tickers)
 
-        if hasattr(ticker_records, "to_dict"):
-            ticker_records = ticker_records.to_dict("records")
-
         for record in ticker_records:
             yield record
 
@@ -74,6 +71,11 @@ class SecFilingsStream(YahooQueryStream):
     name = "sec_filings"
     primary_keys = ["ticker", "date", "type", "title"]
     _use_cached_tickers_default = True
+    _valid_segments = [
+        "stock_tickers",
+        "mutual_fund_tickers",
+        "private_companies_tickers",
+    ]
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
@@ -123,6 +125,11 @@ class IncomeStmtStream(YahooQueryStream):
     name = "income_stmt"
     primary_keys = ["ticker", "date"]
     _use_cached_tickers_default = True  # Uses partitions automatically
+    _valid_segments = [
+        "stock_tickers",
+        "mutual_fund_tickers",
+        "private_companies_tickers",
+    ]
 
     schema = INCOME_STMT_SCHEMA
 

@@ -21,7 +21,7 @@ class EmptyDataRetryException(Exception):
     pass
 
 
-def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=0.003):
+def create_yahoo_retry_decorator(max_tries=8, max_time=300, base_delay=0.003):
     """Create a Yahoo API retry decorator using backoff library."""
 
     def decorator(func):
@@ -31,7 +31,7 @@ def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=0.003):
 
             # Extract ticker context for better logging
             ticker = None
-            if args and hasattr(args[0], '__class__'):
+            if args and hasattr(args[0], "__class__"):
                 # If called as a method, args[0] is self
                 if len(args) > 1:
                     ticker = args[1]
@@ -52,32 +52,32 @@ def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=0.003):
                 raise
             except Exception as e:
                 # Handle other exceptions with context
-                raise Exception(f"Error in {func.__name__} for ticker {ticker}: {e}") from e
+                raise Exception(
+                    f"Error in {func.__name__} for ticker {ticker}: {e}"
+                ) from e
 
         def backoff_handler(details):
             # Extract ticker from exception message if available
-            exception_str = str(details['exception'])
-            ticker_match = re.search(r'ticker: (\w+)', exception_str)
+            exception_str = str(details["exception"])
+            ticker_match = re.search(r"ticker: (\w+)", exception_str)
             ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
 
             logging.info(
-                f"🔄 Retrying {func.__name__}{ticker_info} - "  # ✅ Use original func.__name__
+                f"🔄 Retrying {func.__name__}{ticker_info} - "
                 f"attempt {details['tries']}/{max_tries}, waiting {details['wait']:.1f}s"
             )
 
         def giveup_handler(details):
-            # Extract ticker from exception message if available
-            exception_str = str(details['exception'])
-            ticker_match = re.search(r'ticker: (\w+)', exception_str)
+            exception_str = str(details["exception"])
+            ticker_match = re.search(r"ticker: (\w+)", exception_str)
             ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
 
             logging.warning(
-                f"⚠️ Giving up on {func.__name__}{ticker_info} after {details['tries']} attempts - "  # ✅ Use original func.__name__
+                f"⚠️ Giving up on {func.__name__}{ticker_info} after {details['tries']} attempts - "
                 f"continuing with empty result"
             )
 
-        # ✅ Create wrapper that CATCHES the final exception
-        @functools.wraps(func)  # ✅ Preserve function name here too
+        @functools.wraps(func)
         def safe_wrapper(*args, **kwargs):
             try:
                 return backoff.on_exception(
@@ -92,12 +92,15 @@ def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=0.003):
                     on_giveup=giveup_handler,
                 )(wrapped_func)(*args, **kwargs)
             except EmptyDataRetryException:
-                # ✅ After all retries failed, return empty DataFrame instead of crashing
-                logging.warning(f"🔄 All retries exhausted for {func.__name__} - returning empty DataFrame")
+                logging.warning(
+                    f"🔄 All retries exhausted for {func.__name__} - returning empty DataFrame"
+                )
                 return pd.DataFrame()
+
         return safe_wrapper
 
     return decorator
+
 
 yahoo_api_retry = create_yahoo_retry_decorator()
 
@@ -200,7 +203,7 @@ class TickerFetcher:
         ]
 
         for segment in yahoo_segments:
-            logging.info(f"Pulling {segment} tickers for all_tickers stream.")
+            logging.info(f"Pulling {segment} tickers for tickers stream.")
             try:
                 df = self.fetch_yahoo_tickers(segment)
                 if "segment" not in df.columns:
@@ -214,7 +217,7 @@ class TickerFetcher:
                 logging.warning(f"Could not download {segment}: {e}")
                 continue
 
-        logging.info("Pulling pts_tickers for all_tickers stream.")
+        logging.info("Pulling pts_tickers for tickers stream.")
         try:
             df = self.fetch_pts_tickers()
             df["segment"] = "pts_tickers"
@@ -232,9 +235,9 @@ class TickerFetcher:
             logging.warning(f"Could not download pts_tickers: {e}")
 
         if all_dfs:
-            combined_df = pd.concat(all_dfs, ignore_index=True)
-            combined_df = combined_df.drop_duplicates(subset=["ticker"])
-            return combined_df.to_dict("records")
+            df_all_tickers = pd.concat(all_dfs, ignore_index=True)
+            df_all_tickers = df_all_tickers.drop_duplicates(subset=["ticker"])
+            return df_all_tickers.to_dict("records")
         else:
             logging.warning("No tickers were successfully fetched from any source")
             return []
@@ -258,6 +261,8 @@ class TickerFetcher:
         if isinstance(ticker, str):
             if ticker.endswith("=X"):
                 return "forex_tickers"
+            elif ticker.endswith("=F"):
+                return "futures_tickers"
             elif "-" in ticker and ticker.endswith("USD"):
                 return "crypto_tickers"
             elif ticker.isupper() and len(ticker) <= 5:
