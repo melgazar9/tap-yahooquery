@@ -29,7 +29,12 @@ plugins:
 
       tickers:
         select_tickers:
-          - "*"
+          - "AAPL"
+          - "BTC-USD"
+          - "ES=F"
+          - "TWTR"
+          - "GOOG"
+          - "EURUSD=X"
 
       all_financial_data:
         use_cached_tickers: true

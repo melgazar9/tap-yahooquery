@@ -84,7 +84,6 @@ def yahoo_api_retry(func):
             return result
 
         except EmptyDataException:
-            # Re-raise to trigger backoff
             raise
         except (
             ConnectionError,
@@ -143,8 +142,8 @@ def yahoo_api_retry(func):
                     NewConnectionError,
                     EmptyDataException,
                 ),
-                max_tries=5,
-                max_time=300,
+                max_tries=10,
+                max_time=600,
                 base=3,
                 max_value=60,
                 jitter=backoff.full_jitter,
