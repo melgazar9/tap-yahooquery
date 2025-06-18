@@ -20,6 +20,7 @@ plugins:
 
     select:
       - tickers.*
+      - all_financial_data.*
       - sec_filings.*
       - income_stmt.*
 
@@ -29,6 +30,9 @@ plugins:
       tickers:
         select_tickers:
           - "*"
+
+      all_financial_data:
+        use_cached_tickers: true
 
       sec_filings:
         use_cached_tickers: true

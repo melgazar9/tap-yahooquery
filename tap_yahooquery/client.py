@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from abc import ABC
-from tap_yahooquery.helpers import yahoo_api_retry, TickerFetcher
 
+from singer_sdk.helpers.types import Context
+
+from tap_yahooquery.helpers import TickerFetcher
+from typing import Union
 from singer_sdk.streams import Stream
 from singer_sdk import Tap
 import logging
-import yahooquery as yq
 
 
 class YahooQueryStream(Stream, ABC):
@@ -19,7 +21,6 @@ class YahooQueryStream(Stream, ABC):
 
     def __init__(self, tap: Tap) -> None:
         super().__init__(tap)
-        self.yahoo_client = YahooAPIClient()
         self._all_tickers = None
 
     def _get_stream_config(self) -> dict:
@@ -125,6 +126,14 @@ class YahooQueryStream(Stream, ABC):
 
         return ticker_data.get("segment") in self._valid_segments
 
+    def _get_ticker_from_context(self, context: Context) -> Union[str, None]:
+        """Validates and returns ticker from context."""
+        context = context or {}
+        ticker = context.get("ticker")
+        if not ticker:
+            self.logger.error("No ticker found in context")
+        return ticker
+
 
 class CachedTickerProvider:
     """Provider for cached tickers (matching tap-polygon pattern)."""
@@ -138,22 +147,3 @@ class CachedTickerProvider:
             logging.info("Have not fetched tickers yet. Retrieving from tap cache...")
             self._tickers = self.tap.get_cached_tickers()
         return self._tickers
-
-
-class YahooAPIClient:
-    """Centralized Yahoo API client with standardized retry logic."""
-
-    @yahoo_api_retry
-    def get_sec_filings(self, ticker: str) -> dict:
-        ticker_obj = yq.Ticker(ticker)
-        return ticker_obj.sec_filings
-
-    @yahoo_api_retry
-    def get_income_statement(self, ticker: str) -> dict:
-        ticker_obj = yq.Ticker(ticker)
-        return ticker_obj.income_statement()
-
-    @yahoo_api_retry
-    def get_balance_sheet(self, ticker: str) -> dict:
-        ticker_obj = yq.Ticker(ticker)
-        return ticker_obj.balance_sheet()
