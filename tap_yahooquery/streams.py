@@ -93,7 +93,6 @@ class SecFilingsStream(YahooQueryStream):
             ),
         ),
         th.Property("max_age", th.NumberType),
-        th.Property("timestamp_extracted", th.DateTimeType),
     ).to_dict()
 
     @yahoo_api_retry
