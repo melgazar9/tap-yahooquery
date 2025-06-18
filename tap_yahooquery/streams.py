@@ -163,6 +163,7 @@ class IncomeStmtStream(YahooQueryStream):
                     "DilutedNIAvailtoComStockholders": "diluted_ni_avail_to_common_stock_holders",
                     "EBIT": "ebit",
                     "EBITDA": "ebitda",
+                    "GainOnSaleOfPPE": "gain_on_sale_of_ppe"
                 }
             )
             df = fix_empty_values(df)

@@ -14,7 +14,7 @@ INCOME_STMT_SCHEMA = th.PropertiesList(
     th.Property("cost_of_revenue", th.NumberType),
     th.Property("diluted_average_shares", th.NumberType),
     th.Property("diluted_eps", th.NumberType),
-    th.Property("diluted_ni_avail_to_common_stockholders", th.NumberType),
+    th.Property("diluted_ni_avail_to_common_stock_holders", th.NumberType),
     th.Property("ebit", th.NumberType),
     th.Property("ebitda", th.NumberType),
     th.Property("gross_profit", th.NumberType),
@@ -96,6 +96,8 @@ INCOME_STMT_SCHEMA = th.PropertiesList(
     th.Property("other_non_interest_expense", th.NumberType),
     th.Property("occupancy_and_equipment", th.NumberType),
     th.Property("professional_expense_and_contract_services_expense", th.NumberType),
+    th.Property("period_type", th.StringType),
+    th.Property("currency_code", th.StringType),
 ).to_dict()
 
 
