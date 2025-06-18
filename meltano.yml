@@ -18,11 +18,25 @@ plugins:
     - about
     - stream-maps
 
+    select:
+      - tickers.*
+      - sec_filings.*
+      - income_stmt.*
+
     config:
       start_date: '2010-01-01T00:00:00Z'
 
-    select:
-      - sec_filings.*
+      tickers:
+        select_tickers:
+          - "AAPL"
+          - "GOOGL"
+          - "META"
+
+      sec_filings:
+        use_cached_tickers: true
+
+      income_stmt:
+        use_cached_tickers: true
 
   loaders:
   - name: target-jsonl
