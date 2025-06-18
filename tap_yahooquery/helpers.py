@@ -21,13 +21,12 @@ class EmptyDataRetryException(Exception):
     pass
 
 
-def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=1.3):
+def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=0.003):
     """Create a Yahoo API retry decorator using backoff library."""
 
     def decorator(func):
-        @functools.wraps(func)  # ✅ This preserves the original function name
+        @functools.wraps(func)
         def wrapped_func(*args, **kwargs):
-            # Add a small delay before each request to be nice to Yahoo
             time.sleep(base_delay)
 
             # Extract ticker context for better logging
@@ -35,9 +34,9 @@ def create_yahoo_retry_decorator(max_tries=5, max_time=120, base_delay=1.3):
             if args and hasattr(args[0], '__class__'):
                 # If called as a method, args[0] is self
                 if len(args) > 1:
-                    ticker = args[1]  # Second arg is usually ticker
+                    ticker = args[1]
             elif args:
-                ticker = args[0]  # First arg might be ticker
+                ticker = args[0]
 
             try:
                 result = func(*args, **kwargs)
