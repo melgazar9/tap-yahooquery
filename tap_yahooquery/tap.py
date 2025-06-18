@@ -6,11 +6,7 @@ from singer_sdk import Tap
 from singer_sdk import typing as th
 
 import typing as t
-
-from tap_yahooquery.streams import TickersStream, SecFilingsStream, IncomeStmtStream
-
-
-STREAMS = [TickersStream, SecFilingsStream, IncomeStmtStream]
+from tap_yahooquery.streams import TickersStream, SecFilingsStream, IncomeStmtStream, AllFinancialDataStream
 
 
 class TapYahooQuery(Tap):
@@ -52,6 +48,13 @@ class TapYahooQuery(Tap):
             ),
             description="Income Statement stream configuration",
         ),
+        th.Property(
+            "all_financial_data",
+            th.ObjectType(
+                th.Property("use_cached_tickers", th.BooleanType),
+            ),
+            description="All Financial Data stream configuration",
+        ),
     ).to_dict()
 
     def get_cached_tickers(self) -> t.List[dict]:
@@ -74,6 +77,7 @@ class TapYahooQuery(Tap):
             TickersStream(self),
             SecFilingsStream(self),
             IncomeStmtStream(self),
+            AllFinancialDataStream(self),
         ]
 
 
