@@ -357,6 +357,11 @@ class TickerFetcher:
                 )
             ):
                 return "world_indices_tickers"
+            elif (
+                re.match(r'^[0-9][A-Z0-9]{9}\.F$', ticker)  # Frankfurt exchange
+                or re.match(r'^[0-9][A-Z0-9]{9}$', ticker)  # European funds
+            ):
+                return "european_funds"
             elif ".PVT" in ticker:
                 return "private_companies_tickers"
             elif "." in ticker and not ticker.startswith("^"):

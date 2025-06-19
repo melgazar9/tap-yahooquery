@@ -71,6 +71,7 @@ class BaseFinancialStream(YahooQueryStream):
         "stock_tickers",
         "mutual_fund_tickers",
         "private_companies_tickers",
+        "european_funds",
     ]
 
 
@@ -79,6 +80,11 @@ class SecFilingsStream(BaseFinancialStream):
 
     name = "sec_filings"
     primary_keys = ["ticker", "date", "type", "title"]
+    _valid_segments = [
+        "stock_tickers",
+        "mutual_fund_tickers",
+        "private_companies_tickers",
+    ]
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
@@ -125,6 +131,10 @@ class IncomeStmtStream(BaseFinancialStream):
 
     name = "income_stmt"
     primary_keys = ["ticker", "as_of_date"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
 
     schema = INCOME_STMT_SCHEMA
 
@@ -224,6 +234,10 @@ class CorporateEventsStream(BaseFinancialStream):
 
     name = "corporate_events"
     primary_keys = ["ticker", "date", "id"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
@@ -380,6 +394,7 @@ class DividendHistoryStream(BaseFinancialStream):
 
     name = "dividend_history"
     primary_keys = ["ticker", "date", "dividends"]
+
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
         th.Property("date", th.DateType),
@@ -402,6 +417,11 @@ class CorporateGuidanceStream(BaseFinancialStream):
 
     name = "corporate_guidance"
     primary_keys = ["ticker", "date", "guidance"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
         th.Property("date", th.DateType),
@@ -429,6 +449,11 @@ class CompanyOfficersStream(BaseFinancialStream):
 
     name = "company_officers"
     primary_keys = ["ticker", "date", "officers"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
         th.Property("name", th.StringType),
