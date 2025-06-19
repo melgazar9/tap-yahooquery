@@ -68,7 +68,6 @@ def yahoo_api_retry(func):
         try:
             result = func(*args, **kwargs)
 
-            # ✅ ADD THE MISSING EMPTY DATA CHECK HERE:
             if isinstance(result, pd.DataFrame) and result.empty:
                 if isinstance(ticker, str) and not any(
                     x in str(ticker).lower() for x in ["none", "nan", "inf"]
