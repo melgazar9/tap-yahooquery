@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC
-
+import time
+import pandas as pd
 from singer_sdk.helpers.types import Context
-
 from tap_yahooquery.helpers import TickerFetcher
 from typing import Union
 from singer_sdk.streams import Stream
 from singer_sdk import Tap
 import logging
+
+import yahooquery as yq
 
 
 class YahooQueryStream(Stream, ABC):
@@ -33,12 +35,12 @@ class YahooQueryStream(Stream, ABC):
         stream_config = self._get_stream_config()
 
         if "use_cached_tickers" in stream_config:
-            use_cached = stream_config["use_cached_tickers"]
-            assert isinstance(use_cached, bool), (
+            use_cached_tickers = stream_config["use_cached_tickers"]
+            assert isinstance(use_cached_tickers, bool), (
                 f"Config for {self.name}.use_cached_tickers must be bool, "
-                f"got {type(use_cached)}"
+                f"got {type(use_cached_tickers)}"
             )
-            return use_cached
+            return use_cached_tickers
 
         if hasattr(type(self), "_use_cached_tickers_default"):
             return getattr(type(self), "_use_cached_tickers_default")
@@ -133,6 +135,47 @@ class YahooQueryStream(Stream, ABC):
         if not ticker:
             self.logger.error("No ticker found in context")
         return ticker
+
+    def _fetch_with_crumb_retry(
+        self, ticker: str, method_name: str, is_callable: bool = True, **kwargs
+    ) -> Union[dict, pd.DataFrame]:
+        """Centralized Yahoo API call with crumb retry logic."""
+        ticker_obj = yq.Ticker(ticker)
+        method = getattr(ticker_obj, method_name)
+
+        if is_callable:
+            if kwargs:
+                data = method(**kwargs)
+            else:
+                data = method()
+        else:
+            data = method
+
+        if isinstance(data, dict) and "Invalid Crumb" in str(data):
+            self.logger.warning(f"Invalid crumb for {ticker}, retrying {method_name}")
+            ticker_obj.session.close()
+            ticker_obj._session = None
+            ticker_obj.crumb = None
+            ticker_obj.cookie = None
+            if hasattr(ticker_obj, "_session"):
+                ticker_obj._session = None
+            if hasattr(ticker_obj, "session"):
+                ticker_obj.session.close()
+
+            time.sleep(3)
+
+            ticker_obj = yq.Ticker(ticker)
+            method = getattr(ticker_obj, method_name)
+
+            if is_callable:
+                if kwargs:
+                    data = method(**kwargs)
+                else:
+                    data = method()
+            else:
+                data = method
+
+        return data
 
 
 class CachedTickerProvider:

@@ -12,7 +12,7 @@ import backoff
 import functools
 import time
 
-from requests.exceptions import ConnectionError, HTTPError, RequestException
+from requests.exceptions import ConnectionError, RequestException
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
 pd.set_option("future.no_silent_downcasting", True)
@@ -50,32 +50,26 @@ class EmptyDataException(Exception):
 
 
 def yahoo_api_retry(func):
-    """
-    Enhanced backoff with proper error classification and rate limiting.
-    Adapted from tap-yfinance for yahooquery compatibility.
-    """
+    """Enhanced backoff with proper error classification and rate limiting."""
 
     @functools.wraps(func)
     def wrapped_func(*args, **kwargs):
-        # ✅ Extract ticker for better logging
+        # Extract ticker for better logging
         ticker = "unknown"
-        if args and len(args) > 1:
-            ticker = args[1] if hasattr(args[0], "__class__") else args[0]
-        elif args:
-            ticker = args[0]
+        if len(args) >= 2:
+            ticker = args[1]  # args[0] is self, args[1] is ticker
 
-        # ✅ Apply rate limiting
+        # Apply rate limiting
         rate_limiter.wait_if_needed(f"{func.__name__}_{ticker}")
 
-        # ✅ Add small base delay to reduce API pressure
+        # Add small base delay to reduce API pressure
         time.sleep(0.1)
 
         try:
             result = func(*args, **kwargs)
 
-            # ✅ Check for empty data that should exist
+            # ✅ ADD THE MISSING EMPTY DATA CHECK HERE:
             if isinstance(result, pd.DataFrame) and result.empty:
-                # Only retry empty data for valid tickers
                 if isinstance(ticker, str) and not any(
                     x in str(ticker).lower() for x in ["none", "nan", "inf"]
                 ):
@@ -103,13 +97,9 @@ def yahoo_api_retry(func):
                 logging.info(f"🔄 Rate limit detected for {ticker} - will retry")
                 raise RequestException(f"Rate limit for {ticker}: {e}")
             else:
-                # Log other errors but don't retry
-                logging.warning(f"❌ Non-retryable error for {ticker}: {e}")
-                raise HTTPError(f"Permanent error for {ticker}: {e}")
-
-    def giveup_on_permanent_errors(exception):
-        """Give up on permanent errors, retry on rate limits."""
-        return isinstance(exception, HTTPError)
+                # For other errors, still retry but with different exception type
+                logging.warning(f"🔄 Other error for {ticker} - will retry: {e}")
+                raise RequestException(f"Other error for {ticker}: {e}")
 
     def backoff_handler(details):
         exception_str = str(details["exception"])
@@ -118,7 +108,7 @@ def yahoo_api_retry(func):
 
         logging.info(
             f"🔄 Retrying {details['target'].__name__}{ticker_info} - "
-            f"attempt {details['tries']}/5, waiting {details['wait']:.1f}s"
+            f"attempt {details['tries']}/10, waiting {details['wait']:.1f}s"
         )
 
     def giveup_handler(details):
@@ -147,12 +137,12 @@ def yahoo_api_retry(func):
                 base=3,
                 max_value=60,
                 jitter=backoff.full_jitter,
-                giveup=giveup_on_permanent_errors,
+                # Remove the giveup condition entirely
                 on_backoff=backoff_handler,
                 on_giveup=giveup_handler,
             )(wrapped_func)(*args, **kwargs)
-        except (HTTPError, EmptyDataException):
-            # Return empty DataFrame for permanent failures
+        except Exception:
+            # Return empty DataFrame for any final failures
             logging.info(f"📄 Returning empty DataFrame for {func.__name__}")
             return pd.DataFrame()
 

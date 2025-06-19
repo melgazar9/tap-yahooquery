@@ -23,6 +23,12 @@ plugins:
       - all_financial_data.*
       - sec_filings.*
       - income_stmt.*
+      - corporate_events.*
+      - calendar_events.*
+      - dividend_history.*
+      - corporate_guidance.*
+      - company_officers.*
+#      - news.*
 
     config:
       start_date: '2010-01-01T00:00:00Z'
@@ -35,15 +41,6 @@ plugins:
           - "TWTR"
           - "GOOG"
           - "EURUSD=X"
-
-      all_financial_data:
-        use_cached_tickers: true
-
-      sec_filings:
-        use_cached_tickers: true
-
-      income_stmt:
-        use_cached_tickers: true
 
   loaders:
   - name: target-jsonl

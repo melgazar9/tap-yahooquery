@@ -6,7 +6,18 @@ from singer_sdk import Tap
 from singer_sdk import typing as th
 
 import typing as t
-from tap_yahooquery.streams import TickersStream, SecFilingsStream, IncomeStmtStream, AllFinancialDataStream
+from tap_yahooquery.streams import (
+    TickersStream,
+    SecFilingsStream,
+    IncomeStmtStream,
+    AllFinancialDataStream,
+    CorporateEventsStream,
+    CalendarEventsStream,
+    DividendHistoryStream,
+    CorporateGuidanceStream,
+    CompanyOfficersStream,
+    # NewsStream,
+)
 
 
 class TapYahooQuery(Tap):
@@ -78,6 +89,12 @@ class TapYahooQuery(Tap):
             SecFilingsStream(self),
             IncomeStmtStream(self),
             AllFinancialDataStream(self),
+            CorporateEventsStream(self),
+            CalendarEventsStream(self),
+            DividendHistoryStream(self),
+            CorporateGuidanceStream(self),
+            CompanyOfficersStream(self),
+            # NewsStream(self),
         ]
 
 
