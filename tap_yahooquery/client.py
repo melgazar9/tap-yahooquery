@@ -134,6 +134,14 @@ class YahooQueryStream(Stream, ABC):
         ticker = context.get("ticker")
         if not ticker:
             self.logger.error("No ticker found in context")
+            return None
+
+        if not self._is_valid_ticker_for_stream(ticker):
+            self.logger.warning(
+                f"Skipping {ticker} - not valid for {self.name} stream based on segment rules"
+            )
+            return None
+
         return ticker
 
     def _fetch_with_crumb_retry(
