@@ -6,7 +6,7 @@ from abc import ABC
 import time
 import pandas as pd
 from singer_sdk.helpers.types import Context
-from tap_yahooquery.helpers import TickerFetcher
+from tap_yahooquery.helpers import TickerFetcher, yahoo_api_retry
 from typing import Union
 from singer_sdk.streams import Stream
 from singer_sdk import Tap
@@ -144,6 +144,7 @@ class YahooQueryStream(Stream, ABC):
 
         return ticker
 
+    @yahoo_api_retry
     def _fetch_with_crumb_retry(
         self, ticker: str, method_name: str, is_callable: bool = True, **kwargs
     ) -> Union[dict, pd.DataFrame]:

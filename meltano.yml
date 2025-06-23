@@ -37,6 +37,7 @@ plugins:
         select_tickers:
           - "AAPL"
           - "BTC-USD"
+          - "NVDA"
           - "ES=F"
           - "TWTR"
           - "GOOG"

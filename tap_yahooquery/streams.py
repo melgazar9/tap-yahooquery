@@ -11,7 +11,6 @@ from tap_yahooquery.client import YahooQueryStream
 from tap_yahooquery.schema import INCOME_STMT_SCHEMA, ALL_FINANCIAL_DATA_SCHEMA
 from tap_yahooquery.helpers import (
     TickerFetcher,
-    yahoo_api_retry,
     fix_empty_values,
     clean_strings,
 )
@@ -106,7 +105,6 @@ class SecFilingsStream(BaseFinancialStream):
         th.Property("max_age", th.NumberType),
     ).to_dict()
 
-    @yahoo_api_retry
     def _fetch_sec_filings(self, ticker: str) -> pd.DataFrame:
         """Fetch SEC filings."""
         df = self._fetch_with_crumb_retry(ticker, "sec_filings", is_callable=False)
@@ -115,6 +113,7 @@ class SecFilingsStream(BaseFinancialStream):
         ), f"sec_filings did not return a DataFrame for ticker {ticker}."
         df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
         df.columns = clean_strings(df.columns)
+        df = fix_empty_values(df)
         return df
 
     def get_records(self, context: Context | None) -> t.Iterable[dict]:
@@ -138,7 +137,6 @@ class IncomeStmtStream(BaseFinancialStream):
 
     schema = INCOME_STMT_SCHEMA
 
-    @yahoo_api_retry
     def _fetch_income_statement(self, ticker: str) -> pd.DataFrame:
         """Fetch income statement."""
         df = self._fetch_with_crumb_retry(ticker, "income_statement")
@@ -185,7 +183,6 @@ class AllFinancialDataStream(BaseFinancialStream):
 
     schema = ALL_FINANCIAL_DATA_SCHEMA
 
-    @yahoo_api_retry
     def _fetch_all_financial_data(self, ticker: str) -> pd.DataFrame:
         """Fetch income statement."""
         df = self._fetch_with_crumb_retry(ticker, "all_financial_data")
@@ -208,9 +205,9 @@ class AllFinancialDataStream(BaseFinancialStream):
                 "InvestmentinFinancialAssets": "investment_in_financial_assets",
             }
         )
-        df = fix_empty_values(df)
         df.columns = clean_strings(df.columns)
         df["as_of_date"] = df["as_of_date"].dt.strftime("%Y-%m-%d")
+        df = fix_empty_values(df)
         return df
 
     def get_records(self, context: Context | None) -> t.Iterable[dict]:
@@ -249,7 +246,6 @@ class CorporateEventsStream(BaseFinancialStream):
         th.Property("parent_topics", th.StringType),
     ).to_dict()
 
-    @yahoo_api_retry
     def _fetch_corporate_events(self, ticker: str) -> pd.DataFrame:
         """Fetch corporate events."""
         df = self._fetch_with_crumb_retry(ticker, "corporate_events", is_callable=False)
@@ -298,7 +294,6 @@ class CalendarEventsStream(BaseFinancialStream):
         th.Property("timestamp_extracted", th.DateTimeType),
     ).to_dict()
 
-    @yahoo_api_retry
     def _fetch_calendar_events(self, ticker: str) -> pd.DataFrame:
         """Fetch calendar events."""
         data = self._fetch_with_crumb_retry(
@@ -375,7 +370,9 @@ class CalendarEventsStream(BaseFinancialStream):
                 }
                 records.append(record)
 
-            return pd.DataFrame(records) if records else pd.DataFrame()
+            df = pd.DataFrame(records) if records else pd.DataFrame()
+            df = fix_empty_values(df)
+            return df
 
         except Exception as e:
             self.logger.error(f"Error normalizing calendar events for {ticker}: {e}")
@@ -416,7 +413,7 @@ class CorporateGuidanceStream(BaseFinancialStream):
     """Stream for corporate guidance."""
 
     name = "corporate_guidance"
-    primary_keys = ["ticker", "date", "guidance"]
+    primary_keys = ["ticker", "date"]
     _valid_segments = [
         "stock_tickers",
         "private_companies_tickers",
@@ -441,6 +438,7 @@ class CorporateGuidanceStream(BaseFinancialStream):
         )
         df.columns = clean_strings(df.columns)
         df["significance"] = df["significance"].astype(int)
+        df = fix_empty_values(df)
         yield from df.to_dict("records")
 
 
@@ -464,6 +462,7 @@ class CompanyOfficersStream(BaseFinancialStream):
         th.Property("total_pay", th.NumberType),
         th.Property("exercised_value", th.NumberType),
         th.Property("unexercised_value", th.NumberType),
+        th.Property("max_age", th.NumberType),
     ).to_dict()
 
     def get_records(self, context: Context | None) -> t.Iterable[dict]:
@@ -473,6 +472,7 @@ class CompanyOfficersStream(BaseFinancialStream):
         df = self._fetch_with_crumb_retry(ticker, "company_officers", is_callable=False)
         df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
         df.columns = clean_strings(df.columns)
+        df = fix_empty_values(df)
         yield from df.to_dict("records")
 
 
@@ -491,4 +491,5 @@ class NewsStream(BaseFinancialStream):
         ticker = self._get_ticker_from_context(context)
         self.logger.info(f"Processing news for ticker: {ticker}")
         df = self._fetch_with_crumb_retry(ticker, "news")
+        df = fix_empty_values(df)
         yield from df.to_dict("records")
