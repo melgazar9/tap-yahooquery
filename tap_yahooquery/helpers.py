@@ -257,7 +257,7 @@ class TickerFetcher:
                 df["ticker"] = df["ticker"].astype(str)
                 all_dfs.append(df)
             except Exception as e:
-                logging.warning(f"Could not download {segment}: {e}")
+                logging.warning(f"Could not fetch {segment}: {e}")
                 continue
 
         logging.info("Pulling pts_tickers for tickers stream.")
@@ -275,7 +275,7 @@ class TickerFetcher:
             df["ticker"] = df["ticker"].astype(str)
             all_dfs.append(df)
         except Exception as e:
-            logging.warning(f"Could not download pts_tickers: {e}")
+            logging.warning(f"Could not fetch pts_tickers: {e}")
 
         if all_dfs:
             df_all_tickers = pd.concat(all_dfs, ignore_index=True)
@@ -558,19 +558,15 @@ class TickerFetcher:
         df_all_stocks = df_all_stocks.rename(
             columns={"metadata.founded": "founded", "metadata.employees": "employees"}
         ).rename(columns={"yahoo": "yahoo_ticker", "google": "google_ticker"})
-        df_all_stocks["segment"] = "stocks"
 
         all_indices = pts.get_all_indices()
         df_all_indices = pd.DataFrame({"ticker": all_indices, "name": None})
-        df_all_indices["segment"] = "indices"
 
         industries = pts.get_all_industries()
         df_all_industries = pd.DataFrame({"ticker": None, "name": industries})
-        df_all_industries["segment"] = "industries"
 
         countries = pts.get_all_countries()
         df_countries = pd.DataFrame({"ticker": None, "name": countries})
-        df_countries["segment"] = "countries"
 
         df_final = pd.concat(
             [
@@ -608,6 +604,7 @@ class TickerFetcher:
         df_final[["employees", "founded"]] = df_final[["employees", "founded"]].astype(
             str
         )  # ensure no issues with singer schema
+        df_final["segment"] = df_final["ticker"].apply(TickerFetcher._guess_segment)
         return df_final
 
 
