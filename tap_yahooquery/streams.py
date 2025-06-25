@@ -472,6 +472,8 @@ class CompanyOfficersStream(BaseFinancialStream):
         df = self._fetch_with_crumb_retry(ticker, "company_officers", is_callable=False)
         df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
         df.columns = clean_strings(df.columns)
+        if "officers" not in df.columns:
+            df["officers"] = None
         df = fix_empty_values(df)
         yield from df.to_dict("records")
 
