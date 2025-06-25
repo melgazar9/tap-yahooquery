@@ -28,6 +28,9 @@ plugins:
       - dividend_history.*
       - corporate_guidance.*
       - company_officers.*
+      - earnings_history.*
+      - earnings_trend.*
+      - earnings.*
 #      - news.*
 
     config:

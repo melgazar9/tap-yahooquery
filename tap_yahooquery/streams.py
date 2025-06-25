@@ -476,6 +476,295 @@ class CompanyOfficersStream(BaseFinancialStream):
         yield from df.to_dict("records")
 
 
+class EarningsStream(YahooQueryStream):
+    """Stream for fully flattened earnings data."""
+
+    name = "earnings"
+    primary_keys = ["ticker", "date", "type"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("date", th.StringType, required=True),
+        th.Property(
+            "type", th.StringType, required=True
+        ),  # 'eps', 'quarterly', 'yearly', 'summary', 'earnings_date'
+        th.Property("actual", th.NumberType),
+        th.Property("estimate", th.NumberType),
+        th.Property("revenue", th.NumberType),
+        th.Property("earnings", th.NumberType),
+        th.Property("currency", th.StringType),
+        th.Property("max_age", th.IntegerType),
+        th.Property("current_quarter_estimate", th.NumberType),
+        th.Property("current_quarter_estimate_date", th.StringType),
+        th.Property("current_quarter_estimate_year", th.NumberType),
+        th.Property("earnings_date", th.StringType),
+        th.Property("is_earnings_date_estimate", th.BooleanType),
+    ).to_dict()
+
+    def _fetch_earnings(self, ticker: str) -> pd.DataFrame:
+        data = self._fetch_with_crumb_retry(ticker, "earnings", is_callable=False)
+        if not data or ticker not in data:
+            self.logger.warning(f"No earnings data found for ticker: {ticker}")
+            return pd.DataFrame()
+
+        d = data[ticker]
+        max_age = d.get("maxAge")
+        currency = d.get("financialCurrency")
+        earnings_chart = d.get("earningsChart", {})
+        financials_chart = d.get("financialsChart", {})
+
+        records = []
+
+        # EPS rows (only include actual/estimate)
+        for row in earnings_chart.get("quarterly", []):
+            records.append(
+                {
+                    "ticker": ticker,
+                    "date": row.get("date"),
+                    "type": "eps",
+                    "actual": row.get("actual"),
+                    "estimate": row.get("estimate"),
+                    "currency": currency,
+                    "max_age": max_age,
+                    "current_quarter_estimate": None,
+                    "current_quarter_estimate_date": None,
+                    "current_quarter_estimate_year": None,
+                    "earnings_date": None,
+                    "is_earnings_date_estimate": None,
+                    "revenue": None,
+                    "earnings": None,
+                }
+            )
+
+        # Financials rows (quarterly/yearly, only revenue/earnings)
+        for period, ptype in [("quarterly", "quarterly"), ("yearly", "yearly")]:
+            for row in financials_chart.get(period, []):
+                records.append(
+                    {
+                        "ticker": ticker,
+                        "date": str(row.get("date")),
+                        "type": ptype,
+                        "actual": None,
+                        "estimate": None,
+                        "currency": currency,
+                        "max_age": max_age,
+                        "current_quarter_estimate": None,
+                        "current_quarter_estimate_date": None,
+                        "current_quarter_estimate_year": None,
+                        "earnings_date": None,
+                        "is_earnings_date_estimate": None,
+                        "revenue": row.get("revenue"),
+                        "earnings": row.get("earnings"),
+                    }
+                )
+
+        # Current quarter estimate row
+        if "currentQuarterEstimate" in earnings_chart:
+            records.append(
+                {
+                    "ticker": ticker,
+                    "date": earnings_chart.get("currentQuarterEstimateDate"),
+                    "type": "current_quarter_estimate",
+                    "actual": earnings_chart.get("currentQuarterEstimate"),
+                    "estimate": None,
+                    "currency": currency,
+                    "max_age": max_age,
+                    "current_quarter_estimate": earnings_chart.get(
+                        "currentQuarterEstimate"
+                    ),
+                    "current_quarter_estimate_date": earnings_chart.get(
+                        "currentQuarterEstimateDate"
+                    ),
+                    "current_quarter_estimate_year": earnings_chart.get(
+                        "currentQuarterEstimateYear"
+                    ),
+                    "earnings_date": None,
+                    "is_earnings_date_estimate": None,
+                    "revenue": None,
+                    "earnings": None,
+                }
+            )
+
+        # Earnings date rows (metadata)
+        for e_date in earnings_chart.get("earningsDate", []):
+            records.append(
+                {
+                    "ticker": ticker,
+                    "date": e_date,
+                    "type": "earnings_date",
+                    "actual": None,
+                    "estimate": None,
+                    "currency": currency,
+                    "max_age": max_age,
+                    "current_quarter_estimate": None,
+                    "current_quarter_estimate_date": None,
+                    "current_quarter_estimate_year": None,
+                    "earnings_date": e_date,
+                    "is_earnings_date_estimate": earnings_chart.get(
+                        "isEarningsDateEstimate"
+                    ),
+                    "revenue": None,
+                    "earnings": None,
+                }
+            )
+
+        return pd.DataFrame.from_records(records)
+
+    def get_records(self, context):
+        """Yield earnings records for a given context."""
+        ticker = self._get_ticker_from_context(context)
+        df = self._fetch_earnings(ticker)
+        df = fix_empty_values(df)
+        df.columns = clean_strings(df.columns)
+        yield from df.to_dict("records")
+
+
+class EarningsHistoryStream(YahooQueryStream):
+    """Stream for earnings history."""
+
+    name = "earnings_history"
+    primary_keys = ["ticker", "quarter"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("quarter", th.StringType, required=True),
+        th.Property("max_age", th.NumberType),
+        th.Property("eps_actual", th.NumberType),
+        th.Property("eps_estimate", th.NumberType),
+        th.Property("eps_difference", th.NumberType),
+        th.Property("surprise_percent", th.NumberType),
+        th.Property("currency", th.StringType),
+        th.Property("period", th.StringType),
+    ).to_dict()
+
+    def _fetch_earnings_history(self, ticker: str):
+        """Fetch earnings history."""
+        df = self._fetch_with_crumb_retry(ticker, "earning_history", is_callable=False)
+        df = fix_empty_values(df)
+        df.columns = clean_strings(df.columns)
+        return df
+
+    def get_records(self, context):
+        ticker = self._get_ticker_from_context(context)
+        df = self._fetch_earnings_history(ticker)
+        yield from df.to_dict("records")
+
+
+class EarningsTrendStream(YahooQueryStream):
+    """Stream for earnings trend."""
+
+    name = "earnings_trend"
+    primary_keys = ["ticker", "period", "end_date"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("period", th.StringType, required=True),
+        th.Property("end_date", th.StringType),
+        th.Property("growth", th.AnyType()),
+        th.Property("earnings_avg", th.AnyType()),
+        th.Property("earnings_low", th.AnyType()),
+        th.Property("earnings_high", th.AnyType()),
+        th.Property("earnings_year_ago_eps", th.AnyType()),
+        th.Property("earnings_num_analysts", th.AnyType()),
+        th.Property("earnings_growth", th.AnyType()),
+        th.Property("earnings_currency", th.StringType),
+        th.Property("revenue_avg", th.AnyType()),
+        th.Property("revenue_low", th.AnyType()),
+        th.Property("revenue_high", th.AnyType()),
+        th.Property("revenue_num_analysts", th.AnyType()),
+        th.Property("revenue_year_ago", th.AnyType()),
+        th.Property("revenue_growth", th.AnyType()),
+        th.Property("revenue_currency", th.StringType),
+        th.Property("eps_trend_current", th.AnyType()),
+        th.Property("eps_trend_7days_ago", th.AnyType()),
+        th.Property("eps_trend_30days_ago", th.AnyType()),
+        th.Property("eps_trend_60days_ago", th.AnyType()),
+        th.Property("eps_trend_90days_ago", th.AnyType()),
+        th.Property("eps_trend_currency", th.StringType),
+        th.Property("eps_up_last_7days", th.AnyType()),
+        th.Property("eps_up_last_30days", th.AnyType()),
+        th.Property("eps_down_last_7days", th.AnyType()),
+        th.Property("eps_down_last_30days", th.AnyType()),
+        th.Property("eps_down_last_90days", th.ObjectType()),
+        th.Property("eps_revisions_currency", th.StringType),
+    ).to_dict()
+
+    def _fetch_earnings_trend(self, ticker: str):
+        """Fetch earnings trend data."""
+        data = self._fetch_with_crumb_retry(ticker, "earnings_trend", is_callable=False)
+        records = []
+        for ticker, ticker_data in data.items():
+            for trend in ticker_data["trend"]:
+                record = {
+                    "symbol": ticker,
+                    "period": trend["period"],
+                    "end_date": trend["endDate"],
+                    "growth": trend["growth"],
+                    # Earnings Estimate
+                    "earnings_avg": trend["earningsEstimate"].get("avg"),
+                    "earnings_low": trend["earningsEstimate"].get("low"),
+                    "earnings_high": trend["earningsEstimate"].get("high"),
+                    "earnings_year_ago_eps": trend["earningsEstimate"].get(
+                        "yearAgoEps"
+                    ),
+                    "earnings_num_analysts": trend["earningsEstimate"].get(
+                        "numberOfAnalysts"
+                    ),
+                    "earnings_growth": trend["earningsEstimate"].get("growth"),
+                    "earnings_currency": trend["earningsEstimate"].get(
+                        "earningsCurrency"
+                    ),
+                    # Revenue Estimate
+                    "revenue_avg": trend["revenueEstimate"].get("avg"),
+                    "revenue_low": trend["revenueEstimate"].get("low"),
+                    "revenue_high": trend["revenueEstimate"].get("high"),
+                    "revenue_num_analysts": trend["revenueEstimate"].get(
+                        "numberOfAnalysts"
+                    ),
+                    "revenue_year_ago": trend["revenueEstimate"].get("yearAgoRevenue"),
+                    "revenue_growth": trend["revenueEstimate"].get("growth"),
+                    "revenue_currency": trend["revenueEstimate"].get("revenueCurrency"),
+                    # EPS Trend
+                    "eps_trend_current": trend["epsTrend"].get("current"),
+                    "eps_trend_7days_ago": trend["epsTrend"].get("7daysAgo"),
+                    "eps_trend_30days_ago": trend["epsTrend"].get("30daysAgo"),
+                    "eps_trend_60days_ago": trend["epsTrend"].get("60daysAgo"),
+                    "eps_trend_90days_ago": trend["epsTrend"].get("90daysAgo"),
+                    "eps_trend_currency": trend["epsTrend"].get("epsTrendCurrency"),
+                    # EPS Revisions
+                    "eps_up_last_7days": trend["epsRevisions"].get("upLast7days"),
+                    "eps_up_last_30days": trend["epsRevisions"].get("upLast30days"),
+                    "eps_down_last_7days": trend["epsRevisions"].get("downLast7Days"),
+                    "eps_down_last_30days": trend["epsRevisions"].get("downLast30days"),
+                    "eps_down_last_90days": trend["epsRevisions"].get("downLast90days"),
+                    "eps_revisions_currency": trend["epsRevisions"].get(
+                        "epsRevisionsCurrency"
+                    ),
+                }
+                records.append(record)
+        df = fix_empty_values(pd.DataFrame(records))
+        df = df.rename(columns={"symbol": "ticker"})
+        if "end_date" not in df.columns:
+            df["end_date"] = None
+        df.columns = clean_strings(df.columns)
+        return df
+
+    def get_records(self, context):
+        ticker = self._get_ticker_from_context(context)
+        df = self._fetch_earnings_trend(ticker)
+        yield from df.to_dict("records")
+
+
 class NewsStream(BaseFinancialStream):
     """Stream for news articles."""
 

@@ -16,6 +16,9 @@ from tap_yahooquery.streams import (
     DividendHistoryStream,
     CorporateGuidanceStream,
     CompanyOfficersStream,
+    EarningsHistoryStream,
+    EarningsTrendStream,
+    EarningsStream,
     # NewsStream,
 )
 
@@ -94,6 +97,9 @@ class TapYahooQuery(Tap):
             DividendHistoryStream(self),
             CorporateGuidanceStream(self),
             CompanyOfficersStream(self),
+            EarningsHistoryStream(self),
+            EarningsTrendStream(self),
+            EarningsStream(self),
             # NewsStream(self),
         ]
 
