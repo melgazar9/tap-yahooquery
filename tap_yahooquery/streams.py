@@ -413,7 +413,7 @@ class CorporateGuidanceStream(BaseFinancialStream):
     """Stream for corporate guidance."""
 
     name = "corporate_guidance"
-    primary_keys = ["ticker", "date"]
+    primary_keys = ["ticker", "date", "id"]
     _valid_segments = [
         "stock_tickers",
         "private_companies_tickers",
@@ -436,6 +436,7 @@ class CorporateGuidanceStream(BaseFinancialStream):
         df = self._fetch_with_crumb_retry(
             ticker, "corporate_guidance", is_callable=False
         )
+        df = df.reset_index().rename(columns={"symbol": "ticker"})
         df.columns = clean_strings(df.columns)
         df["significance"] = df["significance"].astype(int)
         df = fix_empty_values(df)
@@ -446,7 +447,7 @@ class CompanyOfficersStream(BaseFinancialStream):
     """Stream for company officers."""
 
     name = "company_officers"
-    primary_keys = ["ticker", "date", "officers"]
+    primary_keys = ["ticker", "name", "title", "fiscal_year", "year_born"]
     _valid_segments = [
         "stock_tickers",
         "private_companies_tickers",
@@ -454,6 +455,7 @@ class CompanyOfficersStream(BaseFinancialStream):
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
+        th.Property("officers", th.StringType, required=True),
         th.Property("name", th.StringType),
         th.Property("age", th.NumberType),
         th.Property("title", th.StringType),
