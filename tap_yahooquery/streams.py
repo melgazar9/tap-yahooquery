@@ -238,7 +238,7 @@ class CorporateEventsStream(BaseFinancialStream):
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
-        th.Property("date", th.DateType),
+        th.Property("date", th.DateTimeType),
         th.Property("id", th.IntegerType),
         th.Property("significance", th.IntegerType),
         th.Property("headline", th.StringType),
@@ -394,7 +394,7 @@ class DividendHistoryStream(BaseFinancialStream):
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
-        th.Property("date", th.DateType),
+        th.Property("date", th.DateTimeType),
         th.Property("dividends", th.NumberType),
     ).to_dict()
 
@@ -455,7 +455,7 @@ class CompanyOfficersStream(BaseFinancialStream):
 
     schema = th.PropertiesList(
         th.Property("ticker", th.StringType, required=True),
-        th.Property("officers", th.StringType, required=True),
+        th.Property("officers", th.StringType),
         th.Property("name", th.StringType),
         th.Property("age", th.NumberType),
         th.Property("title", th.StringType),
