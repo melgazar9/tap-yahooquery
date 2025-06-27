@@ -6,7 +6,7 @@ import typing as t
 from singer_sdk import typing as th
 from singer_sdk.helpers.types import Context
 import pandas as pd
-
+from uuid import uuid5, NAMESPACE_DNS
 from tap_yahooquery.client import YahooQueryStream
 from tap_yahooquery.schema import INCOME_STMT_SCHEMA, ALL_FINANCIAL_DATA_SCHEMA
 from tap_yahooquery.helpers import (
@@ -14,6 +14,11 @@ from tap_yahooquery.helpers import (
     fix_empty_values,
     clean_strings,
 )
+
+
+def make_uuid(row, cols):
+    key = "".join([f"{str(row[col])}|{col}|" for col in cols])
+    return uuid5(NAMESPACE_DNS, key)
 
 
 class TickersStream(YahooQueryStream):
@@ -447,7 +452,7 @@ class CompanyOfficersStream(BaseFinancialStream):
     """Stream for company officers."""
 
     name = "company_officers"
-    primary_keys = ["ticker", "name", "title", "fiscal_year", "year_born"]
+    primary_keys = ["surrogate_key"]
     _valid_segments = [
         "stock_tickers",
         "private_companies_tickers",
@@ -465,6 +470,7 @@ class CompanyOfficersStream(BaseFinancialStream):
         th.Property("exercised_value", th.NumberType),
         th.Property("unexercised_value", th.NumberType),
         th.Property("max_age", th.NumberType),
+        th.Property("surrogate_key", th.StringType),
     ).to_dict()
 
     def get_records(self, context: Context | None) -> t.Iterable[dict]:
@@ -474,8 +480,25 @@ class CompanyOfficersStream(BaseFinancialStream):
         df = self._fetch_with_crumb_retry(ticker, "company_officers", is_callable=False)
         df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
         df.columns = clean_strings(df.columns)
-        if "officers" not in df.columns:
-            df["officers"] = None
+        surrogate_key_cols = [
+            "ticker",
+            "officers",
+            "name",
+            "age",
+            "title",
+            "year_born",
+            "fiscal_year",
+            "total_pay",
+            "exercised_value",
+            "unexercised_value",
+        ]
+        df["surrogate_key"] = df.apply(
+            lambda row: make_uuid(
+                row,
+                surrogate_key_cols,
+            ),
+            axis=1,
+        )
         df = fix_empty_values(df)
         yield from df.to_dict("records")
 
