@@ -17,7 +17,7 @@ from tap_yahooquery.helpers import (
 
 
 def make_uuid(row, cols):
-    key = "".join([f"{str(row[col])}|{col}|" for col in cols])
+    key = "".join([f"{str(row[col])}|{col}|" for col in cols if col in row])
     return uuid5(NAMESPACE_DNS, key)
 
 
