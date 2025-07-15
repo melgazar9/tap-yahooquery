@@ -188,7 +188,7 @@ class YahooQueryStream(Stream, ABC):
 
 
 class CachedTickerProvider:
-    """Provider for cached tickers (matching tap-polygon pattern)."""
+    """Provider for cached tickers (matching tap-yahooquery pattern)."""
 
     def __init__(self, tap):
         self.tap = tap
