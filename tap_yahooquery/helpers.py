@@ -107,7 +107,7 @@ def yahoo_api_retry(func):
 
         logging.info(
             f"🔄 Retrying {details['target'].__name__}{ticker_info} - "
-            f"attempt {details['tries']}/10, waiting {details['wait']:.1f}s"
+            f"attempt {details['tries']}/6, waiting {details['wait']:.1f}s"
         )
 
     def giveup_handler(details):
@@ -131,7 +131,7 @@ def yahoo_api_retry(func):
                     NewConnectionError,
                     EmptyDataException,
                 ),
-                max_tries=10,
+                max_tries=6,
                 max_time=600,
                 base=3,
                 max_value=60,

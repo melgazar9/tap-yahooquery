@@ -462,16 +462,24 @@ class CompanyOfficersStream(BaseFinancialStream):
         th.Property("ticker", th.StringType, required=True),
         th.Property("officers", th.StringType),
         th.Property("name", th.StringType),
-        th.Property("age", th.NumberType),
+        th.Property("age", th.IntegerType),
         th.Property("title", th.StringType),
-        th.Property("year_born", th.NumberType),
+        th.Property("year_born", th.IntegerType),
         th.Property("fiscal_year", th.IntegerType),
         th.Property("total_pay", th.NumberType),
         th.Property("exercised_value", th.NumberType),
         th.Property("unexercised_value", th.NumberType),
-        th.Property("max_age", th.NumberType),
+        th.Property("max_age", th.IntegerType),
         th.Property("surrogate_key", th.StringType),
     ).to_dict()
+
+    def post_process(self, row: dict, context: Context | None = None) -> dict | None:
+        """Convert decimal values to integers for integer fields."""
+        int_fields = ["age", "year_born", "fiscal_year"]
+        for field in int_fields:
+            if field in row and row[field] is not None:
+                row[field] = int(row[field])
+        return row
 
     def get_records(self, context: Context | None) -> t.Iterable[dict]:
         """Get company officers records."""
@@ -499,6 +507,72 @@ class CompanyOfficersStream(BaseFinancialStream):
             ),
             axis=1,
         )
+        df = fix_empty_values(df)
+        yield from df.to_dict("records")
+
+
+class InsiderTransactionsStream(BaseFinancialStream):
+    """Stream for insider transactions."""
+
+    name = "insider_transactions"
+    primary_keys = ["surrogate_key"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("filer_name", th.StringType),
+        th.Property("filer_relation", th.StringType),
+        th.Property("filer_url", th.StringType),
+        th.Property("transaction_text", th.StringType),
+        th.Property("money_text", th.StringType),
+        th.Property("ownership", th.StringType),
+        th.Property("start_date", th.DateType),
+        th.Property("shares", th.IntegerType),
+        th.Property("value", th.NumberType),
+        th.Property("max_age", th.IntegerType),
+        th.Property("surrogate_key", th.StringType),
+    ).to_dict()
+
+    def post_process(self, row: dict, context: Context | None = None) -> dict | None:
+        """Convert decimal values to integers for integer fields."""
+        int_fields = ["shares", "max_age"]
+        for field in int_fields:
+            if field in row and row[field] is not None:
+                row[field] = int(row[field])
+        return row
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get insider transactions records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing insider transactions for ticker: {ticker}")
+        df = self._fetch_with_crumb_retry(ticker, "insider_transactions", is_callable=False)
+
+        # Reset the MultiIndex (symbol, row) and rename symbol to ticker
+        df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
+        df = df.reset_index(drop=True)  # Drop the row index
+
+        # Clean column names
+        df.columns = clean_strings(df.columns)
+
+        # Create surrogate key from unique transaction attributes
+        surrogate_key_cols = [
+            "ticker",
+            "filer_name",
+            "start_date",
+            "shares",
+            "transaction_text",
+        ]
+        df["surrogate_key"] = df.apply(
+            lambda row: make_uuid(
+                row,
+                surrogate_key_cols,
+            ),
+            axis=1,
+        )
+
         df = fix_empty_values(df)
         yield from df.to_dict("records")
 
