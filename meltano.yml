@@ -29,6 +29,12 @@ plugins:
       - corporate_guidance.*
       - company_officers.*
       - insider_transactions.*
+      - recommendation_trend.*
+      - key_stats.*
+      - balance_sheet.*
+      - institution_ownership.*
+      - major_holders.*
+      - esg_scores.*
       - earnings_history.*
       - earnings_trend.*
       - earnings.*

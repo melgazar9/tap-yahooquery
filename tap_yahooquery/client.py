@@ -11,6 +11,7 @@ from typing import Union
 from singer_sdk.streams import Stream
 from singer_sdk import Tap
 import logging
+from uuid import uuid5, NAMESPACE_DNS
 
 import yahooquery as yq
 
@@ -20,6 +21,7 @@ class YahooQueryStream(Stream, ABC):
 
     _use_cached_tickers_default = True
     _valid_segments = None
+    _surrogate_key_cols = None
 
     def __init__(self, tap: Tap) -> None:
         super().__init__(tap)
@@ -185,6 +187,36 @@ class YahooQueryStream(Stream, ABC):
                 data = method
 
         return data
+
+    def _add_surrogate_key_to_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add surrogate key column to dataframe if _surrogate_key_cols is defined."""
+        if self._surrogate_key_cols:
+            df["surrogate_key"] = df.apply(
+                lambda row: self._make_surrogate_key(row, self._surrogate_key_cols),
+                axis=1,
+            )
+        return df
+
+    def _make_surrogate_key(self, row, cols):
+        """Generate a UUID surrogate key from specified columns."""
+        key = "".join([f"{str(row[col])}|{col}|" for col in cols if col in row])
+        return uuid5(NAMESPACE_DNS, key)
+
+    def _get_dataframe_records(self, ticker: str, method_name: str, transformer, is_callable: bool = True, **kwargs):
+        """Fetch, validate dataframe, and yield transformed records. Returns nothing if invalid."""
+        data = self._fetch_with_crumb_retry(ticker, method_name, is_callable, **kwargs)
+        if not isinstance(data, pd.DataFrame):
+            self.logger.warning(f"No valid {method_name} data for {ticker}")
+            return
+        yield from transformer(data)
+
+    def _get_dict_records(self, ticker: str, method_name: str, transformer, is_callable: bool = True, **kwargs):
+        """Fetch, validate dict, and yield transformed records. Returns nothing if invalid."""
+        data = self._fetch_with_crumb_retry(ticker, method_name, is_callable, **kwargs)
+        if not isinstance(data, dict) or ticker not in data or not isinstance(data[ticker], dict):
+            self.logger.warning(f"No valid {method_name} data for {ticker}")
+            return
+        yield from transformer(data)
 
 
 class CachedTickerProvider:

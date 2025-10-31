@@ -6,7 +6,6 @@ import typing as t
 from singer_sdk import typing as th
 from singer_sdk.helpers.types import Context
 import pandas as pd
-from uuid import uuid5, NAMESPACE_DNS
 from tap_yahooquery.client import YahooQueryStream
 from tap_yahooquery.schema import INCOME_STMT_SCHEMA, ALL_FINANCIAL_DATA_SCHEMA
 from tap_yahooquery.helpers import (
@@ -14,11 +13,6 @@ from tap_yahooquery.helpers import (
     fix_empty_values,
     clean_strings,
 )
-
-
-def make_uuid(row, cols):
-    key = "".join([f"{str(row[col])}|{col}|" for col in cols if col in row])
-    return uuid5(NAMESPACE_DNS, key)
 
 
 class TickersStream(YahooQueryStream):
@@ -253,8 +247,12 @@ class CorporateEventsStream(BaseFinancialStream):
 
     def _fetch_corporate_events(self, ticker: str) -> pd.DataFrame:
         """Fetch corporate events."""
-        df = self._fetch_with_crumb_retry(ticker, "corporate_events", is_callable=False)
-        df = fix_empty_values(df.reset_index())
+        data = self._fetch_with_crumb_retry(ticker, "corporate_events", is_callable=False)
+        if not isinstance(data, pd.DataFrame):
+            self.logger.warning(f"No valid corporate_events data for {ticker}")
+            return pd.DataFrame()
+
+        df = fix_empty_values(data.reset_index())
         df = df.rename(columns={"symbol": "ticker"})
         df["significance"] = df["significance"].astype(int)
         df.columns = clean_strings(df.columns)
@@ -407,11 +405,14 @@ class DividendHistoryStream(BaseFinancialStream):
         """Get dividend history records."""
         ticker = self._get_ticker_from_context(context)
         self.logger.info(f"Processing dividend history for ticker: {ticker}")
-        df = self._fetch_with_crumb_retry(
-            ticker, "dividend_history", start="1900-01-01"
+
+        def transform(df):
+            df = fix_empty_values(df.reset_index()).rename(columns={"symbol": "ticker"})
+            yield from df.to_dict("records")
+
+        yield from self._get_dataframe_records(
+            ticker, "dividend_history", transform, start="1900-01-01"
         )
-        df = fix_empty_values(df.reset_index()).rename(columns={"symbol": "ticker"})
-        yield from df.to_dict("records")
 
 
 class CorporateGuidanceStream(BaseFinancialStream):
@@ -438,14 +439,17 @@ class CorporateGuidanceStream(BaseFinancialStream):
         """Get corporate guidance records."""
         ticker = self._get_ticker_from_context(context)
         self.logger.info(f"Processing corporate guidance for ticker: {ticker}")
-        df = self._fetch_with_crumb_retry(
-            ticker, "corporate_guidance", is_callable=False
+
+        def transform(df):
+            df = df.reset_index().rename(columns={"symbol": "ticker"})
+            df.columns = clean_strings(df.columns)
+            df["significance"] = df["significance"].astype(int)
+            df = fix_empty_values(df)
+            yield from df.to_dict("records")
+
+        yield from self._get_dataframe_records(
+            ticker, "corporate_guidance", transform, is_callable=False
         )
-        df = df.reset_index().rename(columns={"symbol": "ticker"})
-        df.columns = clean_strings(df.columns)
-        df["significance"] = df["significance"].astype(int)
-        df = fix_empty_values(df)
-        yield from df.to_dict("records")
 
 
 class CompanyOfficersStream(BaseFinancialStream):
@@ -456,6 +460,18 @@ class CompanyOfficersStream(BaseFinancialStream):
     _valid_segments = [
         "stock_tickers",
         "private_companies_tickers",
+    ]
+    _surrogate_key_cols = [
+        "ticker",
+        "officers",
+        "name",
+        "age",
+        "title",
+        "year_born",
+        "fiscal_year",
+        "total_pay",
+        "exercised_value",
+        "unexercised_value",
     ]
 
     schema = th.PropertiesList(
@@ -485,30 +501,26 @@ class CompanyOfficersStream(BaseFinancialStream):
         """Get company officers records."""
         ticker = self._get_ticker_from_context(context)
         self.logger.info(f"Processing company officers for ticker: {ticker}")
-        df = self._fetch_with_crumb_retry(ticker, "company_officers", is_callable=False)
-        df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
-        df.columns = clean_strings(df.columns)
-        surrogate_key_cols = [
-            "ticker",
-            "officers",
-            "name",
-            "age",
-            "title",
-            "year_born",
-            "fiscal_year",
-            "total_pay",
-            "exercised_value",
-            "unexercised_value",
-        ]
-        df["surrogate_key"] = df.apply(
-            lambda row: make_uuid(
-                row,
-                surrogate_key_cols,
-            ),
-            axis=1,
+
+        def transform(df):
+            df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
+            df.columns = clean_strings(df.columns)
+            df = self._add_surrogate_key_to_dataframe(df)
+            df = fix_empty_values(df)
+            # Convert integer fields from Decimal to int in the records
+            int_fields = ["age", "year_born", "fiscal_year", "max_age"]
+            for record in df.to_dict("records"):
+                for field in int_fields:
+                    if field in record and record[field] is not None:
+                        try:
+                            record[field] = int(float(record[field]))
+                        except (ValueError, TypeError):
+                            pass
+                yield record
+
+        yield from self._get_dataframe_records(
+            ticker, "company_officers", transform, is_callable=False
         )
-        df = fix_empty_values(df)
-        yield from df.to_dict("records")
 
 
 class InsiderTransactionsStream(BaseFinancialStream):
@@ -519,6 +531,13 @@ class InsiderTransactionsStream(BaseFinancialStream):
     _valid_segments = [
         "stock_tickers",
         "private_companies_tickers",
+    ]
+    _surrogate_key_cols = [
+        "ticker",
+        "filer_name",
+        "start_date",
+        "shares",
+        "transaction_text",
     ]
 
     schema = th.PropertiesList(
@@ -548,33 +567,476 @@ class InsiderTransactionsStream(BaseFinancialStream):
         """Get insider transactions records."""
         ticker = self._get_ticker_from_context(context)
         self.logger.info(f"Processing insider transactions for ticker: {ticker}")
-        df = self._fetch_with_crumb_retry(ticker, "insider_transactions", is_callable=False)
 
-        # Reset the MultiIndex (symbol, row) and rename symbol to ticker
-        df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
-        df = df.reset_index(drop=True)  # Drop the row index
+        def transform(df):
+            df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
+            df = df.reset_index(drop=True)
+            df.columns = clean_strings(df.columns)
+            df = self._add_surrogate_key_to_dataframe(df)
+            df = fix_empty_values(df)
+            # Convert integer fields from Decimal to int in the records
+            int_fields = ["shares", "max_age"]
+            for record in df.to_dict("records"):
+                for field in int_fields:
+                    if field in record and record[field] is not None:
+                        try:
+                            record[field] = int(float(record[field]))
+                        except (ValueError, TypeError):
+                            pass
+                yield record
 
-        # Clean column names
-        df.columns = clean_strings(df.columns)
-
-        # Create surrogate key from unique transaction attributes
-        surrogate_key_cols = [
-            "ticker",
-            "filer_name",
-            "start_date",
-            "shares",
-            "transaction_text",
-        ]
-        df["surrogate_key"] = df.apply(
-            lambda row: make_uuid(
-                row,
-                surrogate_key_cols,
-            ),
-            axis=1,
+        yield from self._get_dataframe_records(
+            ticker, "insider_transactions", transform, is_callable=False
         )
 
-        df = fix_empty_values(df)
-        yield from df.to_dict("records")
+
+class RecommendationTrendStream(BaseFinancialStream):
+    """Stream for analyst recommendation trends."""
+
+    name = "recommendation_trend"
+    primary_keys = ["ticker", "period"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("period", th.StringType, required=True),
+        th.Property("strong_buy", th.IntegerType),
+        th.Property("buy", th.IntegerType),
+        th.Property("hold", th.IntegerType),
+        th.Property("sell", th.IntegerType),
+        th.Property("strong_sell", th.IntegerType),
+    ).to_dict()
+
+    def post_process(self, row: dict, context: Context | None = None) -> dict | None:
+        """Convert decimal values to integers for integer fields."""
+        int_fields = ["strong_buy", "buy", "hold", "sell", "strong_sell"]
+        for field in int_fields:
+            if field in row and row[field] is not None:
+                row[field] = int(row[field])
+        return row
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get recommendation trend records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing recommendation trend for ticker: {ticker}")
+        def transform(df):
+            df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
+            df = df.reset_index(drop=True)
+            df.columns = clean_strings(df.columns)
+            df = fix_empty_values(df)
+            yield from df.to_dict("records")
+
+        yield from self._get_dataframe_records(
+            ticker, "recommendation_trend", transform, is_callable=False
+        )
+
+
+class KeyStatsStream(BaseFinancialStream):
+    """Stream for key statistics."""
+
+    name = "key_stats"
+    primary_keys = ["ticker"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("price_hint", th.IntegerType),
+        th.Property("enterprise_value", th.NumberType),
+        th.Property("forward_pe", th.NumberType),
+        th.Property("profit_margins", th.NumberType),
+        th.Property("float_shares", th.NumberType),
+        th.Property("shares_outstanding", th.NumberType),
+        th.Property("shares_short", th.NumberType),
+        th.Property("shares_short_prior_month", th.NumberType),
+        th.Property("shares_short_previous_month_date", th.DateTimeType),
+        th.Property("date_short_interest", th.DateTimeType),
+        th.Property("shares_percent_shares_out", th.NumberType),
+        th.Property("held_percent_insiders", th.NumberType),
+        th.Property("held_percent_institutions", th.NumberType),
+        th.Property("short_ratio", th.NumberType),
+        th.Property("short_percent_of_float", th.NumberType),
+        th.Property("beta", th.NumberType),
+        th.Property("implied_shares_outstanding", th.NumberType),
+        th.Property("category", th.StringType),
+        th.Property("book_value", th.NumberType),
+        th.Property("price_to_book", th.NumberType),
+        th.Property("fund_family", th.StringType),
+        th.Property("legal_type", th.StringType),
+        th.Property("last_fiscal_year_end", th.DateTimeType),
+        th.Property("next_fiscal_year_end", th.DateTimeType),
+        th.Property("most_recent_quarter", th.DateTimeType),
+        th.Property("earnings_quarterly_growth", th.NumberType),
+        th.Property("net_income_to_common", th.NumberType),
+        th.Property("trailing_eps", th.NumberType),
+        th.Property("forward_eps", th.NumberType),
+        th.Property("last_split_factor", th.StringType),
+        th.Property("last_split_date", th.DateTimeType),
+        th.Property("enterprise_to_revenue", th.NumberType),
+        th.Property("enterprise_to_ebitda", th.NumberType),
+        th.Property("52_week_change", th.NumberType),
+        th.Property("sand_p52_week_change", th.NumberType),
+        th.Property("last_dividend_value", th.NumberType),
+        th.Property("last_dividend_date", th.IntegerType),
+        th.Property("forward_p_e", th.NumberType),
+        th.Property("latest_share_class", th.StringType),
+        th.Property("lead_investor", th.StringType),
+    ).to_dict()
+
+    def post_process(self, row: dict, context: Context | None = None) -> dict | None:
+        """Convert decimal values to integers for integer fields."""
+        int_fields = ["max_age", "price_hint", "last_dividend_date"]
+        for field in int_fields:
+            if field in row and row[field] is not None:
+                row[field] = int(row[field])
+        return row
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get key stats records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing key stats for ticker: {ticker}")
+
+        def transform(data):
+            stats = data[ticker]
+            stats["ticker"] = ticker
+            cleaned_stats = {}
+            for key, value in stats.items():
+                cleaned_key = clean_strings([key])[0]
+                cleaned_stats[cleaned_key] = value
+            cleaned_stats = fix_empty_values(pd.DataFrame([cleaned_stats])).to_dict(
+                "records"
+            )[0]
+            yield cleaned_stats
+
+        yield from self._get_dict_records(ticker, "key_stats", transform, is_callable=False)
+
+
+class BalanceSheetStream(BaseFinancialStream):
+    """Stream for balance sheets."""
+
+    name = "balance_sheet"
+    primary_keys = ["ticker", "as_of_date", "period_type"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("as_of_date", th.DateType, required=True),
+        th.Property("period_type", th.StringType, required=True),
+        th.Property("currency_code", th.StringType),
+        # Add common balance sheet fields - there are many, using ObjectType for flexibility
+        th.Property("accounts_payable", th.NumberType),
+        th.Property("accounts_receivable", th.NumberType),
+        th.Property("accumulated_depreciation", th.NumberType),
+        th.Property("cash_and_cash_equivalents", th.NumberType),
+        th.Property("cash_cash_equivalents_and_short_term_investments", th.NumberType),
+        th.Property("cash_equivalents", th.NumberType),
+        th.Property("cash_financial", th.NumberType),
+        th.Property("commercial_paper", th.NumberType),
+        th.Property("common_stock", th.NumberType),
+        th.Property("current_assets", th.NumberType),
+        th.Property("current_liabilities", th.NumberType),
+        th.Property("goodwill", th.NumberType),
+        th.Property("gross_ppe", th.NumberType),
+        th.Property("intangible_assets", th.NumberType),
+        th.Property("inventory", th.NumberType),
+        th.Property("invested_capital", th.NumberType),
+        th.Property("long_term_debt", th.NumberType),
+        th.Property("net_debt", th.NumberType),
+        th.Property("net_ppe", th.NumberType),
+        th.Property("net_tangible_assets", th.NumberType),
+        th.Property("ordinary_shares_number", th.NumberType),
+        th.Property("other_current_assets", th.NumberType),
+        th.Property("other_current_liabilities", th.NumberType),
+        th.Property("retained_earnings", th.NumberType),
+        th.Property("stockholders_equity", th.NumberType),
+        th.Property("tangible_book_value", th.NumberType),
+        th.Property("total_assets", th.NumberType),
+        th.Property("total_debt", th.NumberType),
+        th.Property("total_equity_gross_minority_interest", th.NumberType),
+        th.Property("total_liabilities_net_minority_interest", th.NumberType),
+        th.Property("total_non_current_assets", th.NumberType),
+        th.Property(
+            "total_non_current_liabilities_net_minority_interest", th.NumberType
+        ),
+        th.Property("working_capital", th.NumberType),
+        # Additional properties found in various tickers
+        th.Property("additional_paid_in_capital", th.NumberType),
+        th.Property("allowance_for_doubtful_accounts_receivable", th.NumberType),
+        th.Property("available_for_sale_securities", th.NumberType),
+        th.Property("buildings_and_improvements", th.NumberType),
+        th.Property("capital_lease_obligations", th.NumberType),
+        th.Property("capital_stock", th.NumberType),
+        th.Property("common_stock_equity", th.NumberType),
+        th.Property("construction_in_progress", th.NumberType),
+        th.Property("current_accrued_expenses", th.NumberType),
+        th.Property("current_capital_lease_obligation", th.NumberType),
+        th.Property("current_debt", th.NumberType),
+        th.Property("current_debt_and_capital_lease_obligation", th.NumberType),
+        th.Property("current_deferred_liabilities", th.NumberType),
+        th.Property("current_deferred_revenue", th.NumberType),
+        th.Property("current_provisions", th.NumberType),
+        th.Property("employee_benefits", th.NumberType),
+        th.Property("finished_goods", th.NumberType),
+        th.Property("gains_losses_not_affecting_retained_earnings", th.NumberType),
+        th.Property("goodwill_and_other_intangible_assets", th.NumberType),
+        th.Property("gross_accounts_receivable", th.NumberType),
+        th.Property("gross_p_p_e", th.NumberType),
+        th.Property("income_tax_payable", th.NumberType),
+        th.Property("interest_payable", th.NumberType),
+        th.Property("investmentin_financial_assets", th.NumberType),
+        th.Property("investments_and_advances", th.NumberType),
+        th.Property("land_and_improvements", th.NumberType),
+        th.Property("leases", th.NumberType),
+        th.Property("long_term_capital_lease_obligation", th.NumberType),
+        th.Property("long_term_debt_and_capital_lease_obligation", th.NumberType),
+        th.Property("machinery_furniture_equipment", th.NumberType),
+        th.Property("net_p_p_e", th.NumberType),
+        th.Property("non_current_accounts_receivable", th.NumberType),
+        th.Property("non_current_deferred_assets", th.NumberType),
+        th.Property("non_current_deferred_liabilities", th.NumberType),
+        th.Property("non_current_deferred_revenue", th.NumberType),
+        th.Property("non_current_deferred_taxes_assets", th.NumberType),
+        th.Property("non_current_deferred_taxes_liabilities", th.NumberType),
+        th.Property("non_current_prepaid_assets", th.NumberType),
+        th.Property("other_current_borrowings", th.NumberType),
+        th.Property("other_equity_adjustments", th.NumberType),
+        th.Property("other_intangible_assets", th.NumberType),
+        th.Property("other_investments", th.NumberType),
+        th.Property("other_non_current_assets", th.NumberType),
+        th.Property("other_non_current_liabilities", th.NumberType),
+        th.Property("other_payable", th.NumberType),
+        th.Property("other_properties", th.NumberType),
+        th.Property("other_receivables", th.NumberType),
+        th.Property("other_short_term_investments", th.NumberType),
+        th.Property("payables", th.NumberType),
+        th.Property("payables_and_accrued_expenses", th.NumberType),
+        th.Property(
+            "pensionand_other_post_retirement_benefit_plans_current", th.NumberType
+        ),
+        th.Property("preferred_stock", th.NumberType),
+        th.Property("prepaid_assets", th.NumberType),
+        th.Property("properties", th.NumberType),
+        th.Property("raw_materials", th.NumberType),
+        th.Property("receivables", th.NumberType),
+        th.Property("share_issued", th.NumberType),
+        th.Property("taxes_receivable", th.NumberType),
+        th.Property("total_capitalization", th.NumberType),
+        th.Property("total_tax_payable", th.NumberType),
+        th.Property("tradeand_other_payables_non_current", th.NumberType),
+        th.Property("treasury_shares_number", th.NumberType),
+        th.Property("treasury_stock", th.NumberType),
+        th.Property("work_in_process", th.NumberType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get balance sheet records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing balance sheet for ticker: {ticker}")
+
+        def transform(df):
+            df = df.reset_index().rename(columns={"symbol": "ticker"})
+            df.columns = clean_strings(df.columns)
+            df = fix_empty_values(df)
+            yield from df.to_dict("records")
+
+        yield from self._get_dataframe_records(ticker, "balance_sheet", transform)
+
+
+class InstitutionOwnershipStream(BaseFinancialStream):
+    """Stream for institutional ownership."""
+
+    name = "institution_ownership"
+    primary_keys = ["ticker", "organization", "report_date"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("organization", th.StringType, required=True),
+        th.Property("report_date", th.DateTimeType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("pct_held", th.NumberType),
+        th.Property("position", th.NumberType),
+        th.Property("value", th.NumberType),
+        th.Property("pct_change", th.NumberType),
+    ).to_dict()
+
+    def post_process(self, row: dict, context: Context | None = None) -> dict | None:
+        """Convert decimal values to integers for integer fields."""
+        if "max_age" in row and row["max_age"] is not None:
+            row["max_age"] = int(row["max_age"])
+        return row
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get institution ownership records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing institution ownership for ticker: {ticker}")
+        def transform(df):
+            df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
+            df = df.reset_index(drop=True)
+            df.columns = clean_strings(df.columns)
+            df = fix_empty_values(df)
+            yield from df.to_dict("records")
+
+        yield from self._get_dataframe_records(
+            ticker, "institution_ownership", transform, is_callable=False
+        )
+
+
+class MajorHoldersStream(BaseFinancialStream):
+    """Stream for major holders summary."""
+
+    name = "major_holders"
+    primary_keys = ["ticker"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("insiders_percent_held", th.NumberType),
+        th.Property("institutions_percent_held", th.NumberType),
+        th.Property("institutions_float_percent_held", th.NumberType),
+        th.Property("institutions_count", th.IntegerType),
+    ).to_dict()
+
+    def post_process(self, row: dict, context: Context | None = None) -> dict | None:
+        """Convert decimal values to integers for integer fields."""
+        int_fields = ["max_age", "institutions_count"]
+        for field in int_fields:
+            if field in row and row[field] is not None:
+                row[field] = int(row[field])
+        return row
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get major holders records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing major holders for ticker: {ticker}")
+
+        def transform(data):
+            holders = data[ticker]
+            holders["ticker"] = ticker
+            cleaned_holders = {}
+            for key, value in holders.items():
+                cleaned_key = clean_strings([key])[0]
+                cleaned_holders[cleaned_key] = value
+            cleaned_holders = fix_empty_values(pd.DataFrame([cleaned_holders])).to_dict(
+                "records"
+            )[0]
+            yield cleaned_holders
+
+        yield from self._get_dict_records(ticker, "major_holders", transform, is_callable=False)
+
+
+class EsgScoresStream(BaseFinancialStream):
+    """Stream for ESG scores."""
+
+    name = "esg_scores"
+    primary_keys = ["ticker"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("total_esg", th.NumberType),
+        th.Property("environment_score", th.NumberType),
+        th.Property("social_score", th.NumberType),
+        th.Property("governance_score", th.NumberType),
+        th.Property("rating_year", th.IntegerType),
+        th.Property("rating_month", th.IntegerType),
+        th.Property("highest_controversy", th.NumberType),
+        th.Property("peer_count", th.IntegerType),
+        th.Property("esg_performance", th.StringType),
+        th.Property("peer_group", th.StringType),
+        # Flattened peer performance metrics
+        th.Property("peer_esg_score_performance_min", th.NumberType),
+        th.Property("peer_esg_score_performance_avg", th.NumberType),
+        th.Property("peer_esg_score_performance_max", th.NumberType),
+        th.Property("peer_governance_performance_min", th.NumberType),
+        th.Property("peer_governance_performance_avg", th.NumberType),
+        th.Property("peer_governance_performance_max", th.NumberType),
+        th.Property("peer_social_performance_min", th.NumberType),
+        th.Property("peer_social_performance_avg", th.NumberType),
+        th.Property("peer_social_performance_max", th.NumberType),
+        th.Property("peer_environment_performance_min", th.NumberType),
+        th.Property("peer_environment_performance_avg", th.NumberType),
+        th.Property("peer_environment_performance_max", th.NumberType),
+        th.Property("peer_highest_controversy_performance_min", th.NumberType),
+        th.Property("peer_highest_controversy_performance_avg", th.NumberType),
+        th.Property("peer_highest_controversy_performance_max", th.NumberType),
+        th.Property("percentile", th.NumberType),
+        th.Property("environment_percentile", th.NumberType),
+        th.Property("social_percentile", th.NumberType),
+        th.Property("governance_percentile", th.NumberType),
+        th.Property("adult", th.BooleanType),
+        th.Property("alcoholic", th.BooleanType),
+        th.Property("animal_testing", th.BooleanType),
+        th.Property("catholic", th.BooleanType),
+        th.Property("controversial_weapons", th.BooleanType),
+        th.Property("small_arms", th.BooleanType),
+        th.Property("fur_leather", th.BooleanType),
+        th.Property("gambling", th.BooleanType),
+        th.Property("gmo", th.BooleanType),
+        th.Property("military_contract", th.BooleanType),
+        th.Property("nuclear", th.BooleanType),
+        th.Property("pesticides", th.BooleanType),
+        th.Property("palm_oil", th.BooleanType),
+        th.Property("coal", th.BooleanType),
+        th.Property("tobacco", th.BooleanType),
+    ).to_dict()
+
+    def post_process(self, row: dict, context: Context | None = None) -> dict | None:
+        """Convert decimal values to integers for integer fields."""
+        int_fields = ["max_age", "rating_year", "rating_month", "peer_count"]
+        for field in int_fields:
+            if field in row and row[field] is not None:
+                row[field] = int(row[field])
+        return row
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get ESG scores records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing ESG scores for ticker: {ticker}")
+
+        def transform(data):
+            esg = data[ticker]
+            esg["ticker"] = ticker
+            peer_fields = [
+                "peerEsgScorePerformance",
+                "peerGovernancePerformance",
+                "peerSocialPerformance",
+                "peerEnvironmentPerformance",
+                "peerHighestControversyPerformance",
+            ]
+            for field in peer_fields:
+                if field in esg and isinstance(esg[field], dict):
+                    peer_data = esg.pop(field)
+                    for sub_key, sub_value in peer_data.items():
+                        esg[f"{field}_{sub_key}"] = sub_value
+            cleaned_esg = {}
+            for key, value in esg.items():
+                cleaned_key = clean_strings([key])[0]
+                cleaned_esg[cleaned_key] = value
+            cleaned_esg = fix_empty_values(pd.DataFrame([cleaned_esg])).to_dict("records")[0]
+            yield cleaned_esg
+
+        yield from self._get_dict_records(ticker, "esg_scores", transform, is_callable=False)
 
 
 class EarningsStream(YahooQueryStream):
@@ -613,6 +1075,10 @@ class EarningsStream(YahooQueryStream):
             return pd.DataFrame()
 
         d = data[ticker]
+        if not isinstance(d, dict):
+            self.logger.warning(f"Invalid earnings data for ticker {ticker}: {d}")
+            return pd.DataFrame()
+
         max_age = d.get("maxAge")
         currency = d.get("financialCurrency")
         earnings_chart = d.get("earningsChart", {})
@@ -805,7 +1271,10 @@ class EarningsTrendStream(YahooQueryStream):
         data = self._fetch_with_crumb_retry(ticker, "earnings_trend", is_callable=False)
         records = []
         for ticker, ticker_data in data.items():
-            for trend in ticker_data["trend"]:
+            if not isinstance(ticker_data, dict):
+                self.logger.warning(f"Invalid earnings_trend data for ticker {ticker}: {ticker_data}")
+                continue
+            for trend in ticker_data.get("trend", []):
                 record = {
                     "symbol": ticker,
                     "period": trend["period"],
