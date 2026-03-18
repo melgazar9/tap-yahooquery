@@ -49,6 +49,26 @@ class EmptyDataException(Exception):
     pass
 
 
+_YAHOO_ERROR_MSGS = (
+    "no fundamentals data found",
+    "no data found",
+    "quote not found",
+    "symbol not found",
+)
+
+
+def _is_yahoo_error_response(result, ticker):
+    """Check if a dict response contains a Yahoo error message for the given ticker."""
+    if not isinstance(result, dict):
+        return False
+    # Only check the ticker's entry, not the entire dict
+    ticker_val = result.get(ticker)
+    if isinstance(ticker_val, str):
+        val_lower = ticker_val.lower()
+        return any(msg in val_lower for msg in _YAHOO_ERROR_MSGS)
+    return False
+
+
 def yahoo_api_retry(func):
     """Enhanced backoff with proper error classification and rate limiting."""
 
@@ -67,6 +87,13 @@ def yahoo_api_retry(func):
 
         try:
             result = func(*args, **kwargs)
+
+            # Check for error responses from yahooquery (e.g. delisted tickers)
+            if _is_yahoo_error_response(result, ticker):
+                logging.info(
+                    f"No data available for {ticker} (likely delisted/invalid) - skipping"
+                )
+                return result  # Return as-is, don't retry
 
             if isinstance(result, pd.DataFrame) and result.empty:
                 if isinstance(ticker, str) and not any(
@@ -105,9 +132,11 @@ def yahoo_api_retry(func):
         ticker_match = re.search(r"for (\w+)", exception_str)
         ticker_info = f" [{ticker_match.group(1)}]" if ticker_match else ""
 
+        is_empty = isinstance(details["exception"], EmptyDataException)
+        max_tries = 3 if is_empty else 6
         logging.info(
             f"🔄 Retrying {details['target'].__name__}{ticker_info} - "
-            f"attempt {details['tries']}/6, waiting {details['wait']:.1f}s"
+            f"attempt {details['tries']}/{max_tries}, waiting {details['wait']:.1f}s"
         )
 
     def giveup_handler(details):
@@ -117,6 +146,13 @@ def yahoo_api_retry(func):
 
         logging.warning(
             f"⚠️ Giving up on {details['target'].__name__}{ticker_info} after {details['tries']} attempts"
+        )
+
+    def giveup_on_empty_data(details):
+        """Give up early on empty data (3 tries) — likely delisted/invalid ticker."""
+        return (
+            isinstance(details["exception"], EmptyDataException)
+            and details["tries"] >= 3
         )
 
     @functools.wraps(func)
@@ -136,7 +172,7 @@ def yahoo_api_retry(func):
                 base=3,
                 max_value=60,
                 jitter=backoff.full_jitter,
-                # Remove the giveup condition entirely
+                giveup=giveup_on_empty_data,
                 on_backoff=backoff_handler,
                 on_giveup=giveup_handler,
             )(wrapped_func)(*args, **kwargs)

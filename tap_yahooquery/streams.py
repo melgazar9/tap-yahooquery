@@ -7,7 +7,11 @@ from singer_sdk import typing as th
 from singer_sdk.helpers.types import Context
 import pandas as pd
 from tap_yahooquery.client import YahooQueryStream
-from tap_yahooquery.schema import INCOME_STMT_SCHEMA, ALL_FINANCIAL_DATA_SCHEMA
+from tap_yahooquery.schema import (
+    INCOME_STMT_SCHEMA,
+    ALL_FINANCIAL_DATA_SCHEMA,
+    CASH_FLOW_SCHEMA,
+)
 from tap_yahooquery.helpers import (
     TickerFetcher,
     fix_empty_values,
@@ -355,7 +359,7 @@ class CalendarEventsStream(BaseFinancialStream):
                             "is_estimate": earnings.get(
                                 "isEarningsDateEstimate", False
                             ),
-                            "timestamp_extracted": pd.Timestamp.utcnow(),
+                            "timestamp_extracted": pd.Timestamp.now("UTC"),
                         }
                         records.append(record)
                     except Exception as e:
@@ -372,7 +376,7 @@ class CalendarEventsStream(BaseFinancialStream):
                     "event_date": pd.to_datetime(ticker_data["dividendDate"]),
                     "event_category": "dividend",
                     "dividend_date": pd.to_datetime(ticker_data["dividendDate"]),
-                    "timestamp_extracted": pd.Timestamp.utcnow(),
+                    "timestamp_extracted": pd.Timestamp.now("UTC"),
                 }
                 records.append(record)
 
@@ -1368,3 +1372,637 @@ class NewsStream(BaseFinancialStream):
         df = self._fetch_with_crumb_retry(ticker, "news")
         df = fix_empty_values(df)
         yield from df.to_dict("records")
+
+
+class CashFlowStream(BaseFinancialStream):
+    """Stream for cash flow statements."""
+
+    name = "cash_flow"
+    primary_keys = ["ticker", "as_of_date", "period_type"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = CASH_FLOW_SCHEMA
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get cash flow records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing cash_flow for ticker: {ticker}")
+        extra_renames = {
+            "NetPPEPurchaseAndSale": "net_ppe_purchase_and_sale",
+            "PurchaseOfPPE": "purchase_of_ppe",
+        }
+        yield from self._get_dataframe_records(
+            ticker,
+            "cash_flow",
+            self._make_df_transform(
+                extra_renames=extra_renames, date_columns={"as_of_date": "%Y-%m-%d"}
+            ),
+        )
+
+
+class PriceHistoryStream(BaseFinancialStream):
+    """Stream for historical OHLCV price data."""
+
+    name = "price_history"
+    primary_keys = ["ticker", "date"]
+    _valid_segments = None  # All ticker types
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("date", th.DateType, required=True),
+        th.Property("open", th.NumberType),
+        th.Property("high", th.NumberType),
+        th.Property("low", th.NumberType),
+        th.Property("close", th.NumberType),
+        th.Property("volume", th.NumberType),
+        th.Property("adjclose", th.NumberType),
+        th.Property("dividends", th.NumberType),
+        th.Property("splits", th.NumberType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get historical price records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing price_history for ticker: {ticker}")
+        start_date = self.config.get("start_date", "1900-01-01")
+        yield from self._get_dataframe_records(
+            ticker,
+            "history",
+            self._make_df_transform(date_columns={"date": "%Y-%m-%d"}),
+            start=start_date,
+        )
+
+
+class SummaryDetailStream(BaseFinancialStream):
+    """Stream for summary detail data (market cap, PE, dividend yield, etc.)."""
+
+    name = "summary_detail"
+    primary_keys = ["ticker"]
+    _valid_segments = None  # All ticker types
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("price_hint", th.IntegerType),
+        th.Property("previous_close", th.NumberType),
+        th.Property("open", th.NumberType),
+        th.Property("day_low", th.NumberType),
+        th.Property("day_high", th.NumberType),
+        th.Property("regular_market_previous_close", th.NumberType),
+        th.Property("regular_market_open", th.NumberType),
+        th.Property("regular_market_day_low", th.NumberType),
+        th.Property("regular_market_day_high", th.NumberType),
+        th.Property("dividend_rate", th.NumberType),
+        th.Property("dividend_yield", th.NumberType),
+        th.Property("ex_dividend_date", th.StringType),
+        th.Property("payout_ratio", th.NumberType),
+        th.Property("five_year_avg_dividend_yield", th.NumberType),
+        th.Property("beta", th.NumberType),
+        th.Property("trailing_pe", th.NumberType),
+        th.Property("forward_pe", th.NumberType),
+        th.Property("volume", th.NumberType),
+        th.Property("regular_market_volume", th.NumberType),
+        th.Property("average_volume", th.NumberType),
+        th.Property("average_volume10days", th.NumberType),
+        th.Property("average_daily_volume10_day", th.NumberType),
+        th.Property("bid", th.NumberType),
+        th.Property("ask", th.NumberType),
+        th.Property("bid_size", th.NumberType),
+        th.Property("ask_size", th.NumberType),
+        th.Property("market_cap", th.NumberType),
+        th.Property("non_diluted_market_cap", th.NumberType),
+        th.Property("fifty_two_week_low", th.NumberType),
+        th.Property("fifty_two_week_high", th.NumberType),
+        th.Property("all_time_high", th.NumberType),
+        th.Property("all_time_low", th.NumberType),
+        th.Property("price_to_sales_trailing12_months", th.NumberType),
+        th.Property("fifty_day_average", th.NumberType),
+        th.Property("two_hundred_day_average", th.NumberType),
+        th.Property("trailing_annual_dividend_rate", th.NumberType),
+        th.Property("trailing_annual_dividend_yield", th.NumberType),
+        th.Property("currency", th.StringType),
+        th.Property("from_currency", th.StringType),
+        th.Property("to_currency", th.StringType),
+        th.Property("last_market", th.StringType),
+        th.Property("coin_market_cap_link", th.StringType),
+        th.Property("algorithm", th.StringType),
+        th.Property("tradeable", th.BooleanType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing summary_detail for ticker: {ticker}")
+        yield from self._get_dict_records(
+            ticker,
+            "summary_detail",
+            self._make_dict_transform(
+                ticker,
+                extra_renames={
+                    "trailingPE": "trailing_pe",
+                    "forwardPE": "forward_pe",
+                },
+            ),
+            is_callable=False,
+        )
+
+
+class AssetProfileStream(BaseFinancialStream):
+    """Stream for company profile (sector, industry, description, etc.)."""
+
+    name = "asset_profile"
+    primary_keys = ["ticker"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("address1", th.StringType),
+        th.Property("address2", th.StringType),
+        th.Property("city", th.StringType),
+        th.Property("state", th.StringType),
+        th.Property("zip", th.StringType),
+        th.Property("country", th.StringType),
+        th.Property("phone", th.StringType),
+        th.Property("website", th.StringType),
+        th.Property("industry", th.StringType),
+        th.Property("industry_key", th.StringType),
+        th.Property("industry_disp", th.StringType),
+        th.Property("sector", th.StringType),
+        th.Property("sector_key", th.StringType),
+        th.Property("sector_disp", th.StringType),
+        th.Property("long_business_summary", th.StringType),
+        th.Property("full_time_employees", th.IntegerType),
+        th.Property("audit_risk", th.IntegerType),
+        th.Property("board_risk", th.IntegerType),
+        th.Property("compensation_risk", th.IntegerType),
+        th.Property("share_holder_rights_risk", th.IntegerType),
+        th.Property("overall_risk", th.IntegerType),
+        th.Property("governance_epoch_date", th.StringType),
+        th.Property("compensation_as_of_epoch_date", th.StringType),
+        th.Property("ir_website", th.StringType),
+        th.Property("max_age", th.IntegerType),
+    ).to_dict()
+
+    # Fields to exclude (nested objects handled by other streams)
+    _exclude_fields = {"companyOfficers", "executiveTeam"}
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing asset_profile for ticker: {ticker}")
+        yield from self._get_dict_records(
+            ticker,
+            "asset_profile",
+            self._make_dict_transform(
+                ticker, exclude_nested=True, exclude_fields=self._exclude_fields
+            ),
+            is_callable=False,
+        )
+
+
+class FinancialDataStream(BaseFinancialStream):
+    """Stream for current financial data snapshot (revenue, margins, cash, debt)."""
+
+    name = "financial_data"
+    primary_keys = ["ticker"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("current_price", th.NumberType),
+        th.Property("target_high_price", th.NumberType),
+        th.Property("target_low_price", th.NumberType),
+        th.Property("target_mean_price", th.NumberType),
+        th.Property("target_median_price", th.NumberType),
+        th.Property("recommendation_mean", th.NumberType),
+        th.Property("recommendation_key", th.StringType),
+        th.Property("number_of_analyst_opinions", th.IntegerType),
+        th.Property("total_cash", th.NumberType),
+        th.Property("total_cash_per_share", th.NumberType),
+        th.Property("ebitda", th.NumberType),
+        th.Property("total_debt", th.NumberType),
+        th.Property("quick_ratio", th.NumberType),
+        th.Property("current_ratio", th.NumberType),
+        th.Property("total_revenue", th.NumberType),
+        th.Property("debt_to_equity", th.NumberType),
+        th.Property("revenue_per_share", th.NumberType),
+        th.Property("return_on_assets", th.NumberType),
+        th.Property("return_on_equity", th.NumberType),
+        th.Property("gross_profits", th.NumberType),
+        th.Property("free_cashflow", th.NumberType),
+        th.Property("operating_cashflow", th.NumberType),
+        th.Property("earnings_growth", th.NumberType),
+        th.Property("revenue_growth", th.NumberType),
+        th.Property("gross_margins", th.NumberType),
+        th.Property("ebitda_margins", th.NumberType),
+        th.Property("operating_margins", th.NumberType),
+        th.Property("profit_margins", th.NumberType),
+        th.Property("financial_currency", th.StringType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing financial_data for ticker: {ticker}")
+        yield from self._get_dict_records(
+            ticker,
+            "financial_data",
+            self._make_dict_transform(ticker, exclude_nested=True),
+            is_callable=False,
+        )
+
+
+class GradingHistoryStream(BaseFinancialStream):
+    """Stream for analyst upgrades/downgrades history."""
+
+    name = "grading_history"
+    primary_keys = ["ticker", "epoch_grade_date", "firm"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("epoch_grade_date", th.StringType, required=True),
+        th.Property("firm", th.StringType, required=True),
+        th.Property("to_grade", th.StringType),
+        th.Property("from_grade", th.StringType),
+        th.Property("action", th.StringType),
+        th.Property("price_target_action", th.StringType),
+        th.Property("current_price_target", th.NumberType),
+        th.Property("prior_price_target", th.NumberType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get grading history records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing grading_history for ticker: {ticker}")
+        yield from self._get_dataframe_records(
+            ticker,
+            "grading_history",
+            self._make_df_transform(drop_columns=["row"]),
+            is_callable=False,
+        )
+
+
+class ValuationMeasuresStream(BaseFinancialStream):
+    """Stream for valuation measures over time (PE, PB, PS, EV/EBITDA)."""
+
+    name = "valuation_measures"
+    primary_keys = ["ticker", "as_of_date"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("as_of_date", th.DateType, required=True),
+        th.Property("period_type", th.StringType),
+        th.Property("enterprise_value", th.NumberType),
+        th.Property("enterprises_value_ebitda_ratio", th.NumberType),
+        th.Property("enterprises_value_revenue_ratio", th.NumberType),
+        th.Property("forward_pe_ratio", th.NumberType),
+        th.Property("market_cap", th.NumberType),
+        th.Property("pb_ratio", th.NumberType),
+        th.Property("pe_ratio", th.NumberType),
+        th.Property("peg_ratio", th.NumberType),
+        th.Property("ps_ratio", th.NumberType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get valuation measures records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing valuation_measures for ticker: {ticker}")
+        extra_renames = {
+            "EnterprisesValueEBITDARatio": "enterprises_value_ebitda_ratio",
+            "EnterprisesValueRevenueRatio": "enterprises_value_revenue_ratio",
+        }
+        yield from self._get_dataframe_records(
+            ticker,
+            "valuation_measures",
+            self._make_df_transform(
+                extra_renames=extra_renames, date_columns={"as_of_date": "%Y-%m-%d"}
+            ),
+            is_callable=False,
+        )
+
+
+class InsiderHoldersStream(BaseFinancialStream):
+    """Stream for insider holders data."""
+
+    name = "insider_holders"
+    primary_keys = ["ticker", "name", "latest_trans_date", "transaction_description"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("name", th.StringType, required=True),
+        th.Property("relation", th.StringType),
+        th.Property("url", th.StringType),
+        th.Property("transaction_description", th.StringType),
+        th.Property("latest_trans_date", th.StringType, required=True),
+        th.Property("position_direct", th.NumberType),
+        th.Property("position_direct_date", th.StringType),
+        th.Property("max_age", th.IntegerType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get insider holders records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing insider_holders for ticker: {ticker}")
+        yield from self._get_dataframe_records(
+            ticker,
+            "insider_holders",
+            self._make_df_transform(drop_columns=["row"]),
+            is_callable=False,
+        )
+
+
+class OptionChainStream(BaseFinancialStream):
+    """Stream for options chain data."""
+
+    name = "option_chain"
+    primary_keys = ["ticker", "expiration", "option_type", "contract_symbol"]
+    _valid_segments = [
+        "stock_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("expiration", th.StringType, required=True),
+        th.Property("option_type", th.StringType, required=True),
+        th.Property("contract_symbol", th.StringType, required=True),
+        th.Property("strike", th.NumberType),
+        th.Property("currency", th.StringType),
+        th.Property("last_price", th.NumberType),
+        th.Property("change", th.NumberType),
+        th.Property("percent_change", th.NumberType),
+        th.Property("volume", th.NumberType),
+        th.Property("open_interest", th.NumberType),
+        th.Property("bid", th.NumberType),
+        th.Property("ask", th.NumberType),
+        th.Property("contract_size", th.StringType),
+        th.Property("last_trade_date", th.DateTimeType),
+        th.Property("implied_volatility", th.NumberType),
+        th.Property("in_the_money", th.BooleanType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get option chain records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing option_chain for ticker: {ticker}")
+
+        yield from self._get_dataframe_records(
+            ticker,
+            "option_chain",
+            self._make_df_transform(
+                extra_renames={"optionType": "option_type"},
+                date_columns={"last_trade_date": "%Y-%m-%dT%H:%M:%S"},
+            ),
+            is_callable=False,
+        )
+
+
+class PriceStream(BaseFinancialStream):
+    """Stream for current price and market data."""
+
+    name = "price"
+    primary_keys = ["ticker"]
+    _valid_segments = None  # All ticker types
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("pre_market_change_percent", th.NumberType),
+        th.Property("pre_market_change", th.NumberType),
+        th.Property("pre_market_time", th.StringType),
+        th.Property("pre_market_price", th.NumberType),
+        th.Property("pre_market_source", th.StringType),
+        th.Property("post_market_change_percent", th.NumberType),
+        th.Property("post_market_change", th.NumberType),
+        th.Property("post_market_time", th.StringType),
+        th.Property("post_market_price", th.NumberType),
+        th.Property("post_market_source", th.StringType),
+        th.Property("regular_market_change_percent", th.NumberType),
+        th.Property("regular_market_change", th.NumberType),
+        th.Property("regular_market_time", th.StringType),
+        th.Property("price_hint", th.IntegerType),
+        th.Property("regular_market_price", th.NumberType),
+        th.Property("regular_market_day_high", th.NumberType),
+        th.Property("regular_market_day_low", th.NumberType),
+        th.Property("regular_market_volume", th.NumberType),
+        th.Property("regular_market_previous_close", th.NumberType),
+        th.Property("regular_market_source", th.StringType),
+        th.Property("regular_market_open", th.NumberType),
+        th.Property("exchange", th.StringType),
+        th.Property("exchange_name", th.StringType),
+        th.Property("exchange_data_delayed_by", th.IntegerType),
+        th.Property("market_state", th.StringType),
+        th.Property("quote_type", th.StringType),
+        th.Property("short_name", th.StringType),
+        th.Property("long_name", th.StringType),
+        th.Property("currency", th.StringType),
+        th.Property("quote_source_name", th.StringType),
+        th.Property("currency_symbol", th.StringType),
+        th.Property("from_currency", th.StringType),
+        th.Property("to_currency", th.StringType),
+        th.Property("last_market", th.StringType),
+        th.Property("market_cap", th.NumberType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get price records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing price for ticker: {ticker}")
+        yield from self._get_dict_records(
+            ticker,
+            "price",
+            self._make_dict_transform(
+                ticker,
+                exclude_nested=True,
+                exclude_fields={"symbol", "underlyingSymbol"},
+            ),
+            is_callable=False,
+        )
+
+
+class SharePurchaseActivityStream(BaseFinancialStream):
+    """Stream for share purchase/buyback activity."""
+
+    name = "share_purchase_activity"
+    primary_keys = ["ticker"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("max_age", th.IntegerType),
+        th.Property("period", th.StringType),
+        th.Property("buy_info_count", th.IntegerType),
+        th.Property("buy_info_shares", th.IntegerType),
+        th.Property("buy_percent_insider_shares", th.NumberType),
+        th.Property("sell_info_count", th.IntegerType),
+        th.Property("sell_info_shares", th.IntegerType),
+        th.Property("sell_percent_insider_shares", th.NumberType),
+        th.Property("net_info_count", th.IntegerType),
+        th.Property("net_info_shares", th.IntegerType),
+        th.Property("net_percent_insider_shares", th.NumberType),
+        th.Property("total_insider_shares", th.IntegerType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing share_purchase_activity for ticker: {ticker}")
+        yield from self._get_dict_records(
+            ticker,
+            "share_purchase_activity",
+            self._make_dict_transform(ticker, exclude_nested=True),
+            is_callable=False,
+        )
+
+
+class SummaryProfileStream(BaseFinancialStream):
+    """Stream for company summary profile."""
+
+    name = "summary_profile"
+    primary_keys = ["ticker"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("address1", th.StringType),
+        th.Property("address2", th.StringType),
+        th.Property("city", th.StringType),
+        th.Property("state", th.StringType),
+        th.Property("zip", th.StringType),
+        th.Property("country", th.StringType),
+        th.Property("phone", th.StringType),
+        th.Property("website", th.StringType),
+        th.Property("industry", th.StringType),
+        th.Property("industry_key", th.StringType),
+        th.Property("industry_disp", th.StringType),
+        th.Property("sector", th.StringType),
+        th.Property("sector_key", th.StringType),
+        th.Property("sector_disp", th.StringType),
+        th.Property("long_business_summary", th.StringType),
+        th.Property("full_time_employees", th.IntegerType),
+        th.Property("ir_website", th.StringType),
+        th.Property("max_age", th.IntegerType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing summary_profile for ticker: {ticker}")
+        yield from self._get_dict_records(
+            ticker,
+            "summary_profile",
+            self._make_dict_transform(ticker, exclude_nested=True),
+            is_callable=False,
+        )
+
+
+class TechnicalEventsStream(BaseFinancialStream):
+    """Stream for technical trading events (support/resistance, patterns, signals)."""
+
+    name = "technical_events"
+    primary_keys = ["ticker", "id"]
+    _valid_segments = [
+        "stock_tickers",
+        "private_companies_tickers",
+    ]
+
+    schema = th.PropertiesList(
+        th.Property("ticker", th.StringType, required=True),
+        th.Property("id", th.StringType, required=True),
+        # Summary fields (denormalized onto each event row)
+        th.Property("short_term_outlook", th.StringType),
+        th.Property("mid_term_outlook", th.StringType),
+        th.Property("long_term_outlook", th.StringType),
+        th.Property("support", th.NumberType),
+        th.Property("resistance", th.NumberType),
+        th.Property("stop_loss", th.NumberType),
+        # Event fields
+        th.Property("trading_horizon", th.StringType),
+        th.Property("start_date", th.NumberType),
+        th.Property("end_date", th.NumberType),
+        th.Property("event_type", th.StringType),
+        th.Property("duration", th.IntegerType),
+        th.Property("inbound_trend_duration", th.IntegerType),
+        th.Property("price_period", th.StringType),
+        th.Property("price_open", th.NumberType),
+        th.Property("price_close", th.NumberType),
+        th.Property("price_high", th.NumberType),
+        th.Property("price_low", th.NumberType),
+        th.Property("price_volume", th.NumberType),
+        th.Property("price_date", th.NumberType),
+        th.Property("trade_type", th.StringType),
+        th.Property("close_position", th.StringType),
+        th.Property("lower", th.NumberType),
+        th.Property("upper", th.NumberType),
+    ).to_dict()
+
+    def get_records(self, context: Context | None) -> t.Iterable[dict]:
+        """Get technical events records."""
+        ticker = self._get_ticker_from_context(context)
+        self.logger.info(f"Processing technical_events for ticker: {ticker}")
+
+        def transform(data):
+            ticker_data = data[ticker]
+            if not isinstance(ticker_data, dict):
+                return
+
+            summary = ticker_data.get("technicalEvents", {})
+            events = ticker_data.get("events", [])
+
+            for event in events:
+                record = {
+                    "ticker": ticker,
+                    "id": event.get("id"),
+                    # Summary (denormalized)
+                    "short_term_outlook": summary.get("shortTerm"),
+                    "mid_term_outlook": summary.get("midTerm"),
+                    "long_term_outlook": summary.get("longTerm"),
+                    "support": summary.get("support"),
+                    "resistance": summary.get("resistance"),
+                    "stop_loss": summary.get("stopLoss"),
+                    # Event
+                    "trading_horizon": event.get("tradingHorizon"),
+                    "start_date": event.get("startDate"),
+                    "end_date": event.get("endDate"),
+                    "event_type": event.get("eventType"),
+                    "duration": event.get("duration"),
+                    "inbound_trend_duration": event.get("inboundTrendDuration"),
+                    "price_period": event.get("pricePeriod"),
+                    "price_open": event.get("priceOpen"),
+                    "price_close": event.get("priceClose"),
+                    "price_high": event.get("priceHigh"),
+                    "price_low": event.get("priceLow"),
+                    "price_volume": event.get("priceVolume"),
+                    "price_date": event.get("priceDate"),
+                    "trade_type": event.get("tradeType"),
+                    "close_position": event.get("closePosition"),
+                    "lower": event.get("lower"),
+                    "upper": event.get("upper"),
+                }
+                yield record
+
+        yield from self._get_dict_records(
+            ticker, "p_technical_events", transform, is_callable=False
+        )

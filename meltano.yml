@@ -39,6 +39,19 @@ plugins:
       - earnings_trend.*
       - earnings.*
 #      - news.*
+      - cash_flow.*
+      - price_history.*
+      - summary_detail.*
+      - asset_profile.*
+      - financial_data.*
+      - grading_history.*
+      - valuation_measures.*
+      - insider_holders.*
+      - option_chain.*
+      - price.*
+      - share_purchase_activity.*
+      - summary_profile.*
+      - technical_events.*
 
     config:
       start_date: '2010-01-01T00:00:00Z'

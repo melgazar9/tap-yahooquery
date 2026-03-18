@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC
+import random
 import time
 import pandas as pd
 from singer_sdk.helpers.types import Context
-from tap_yahooquery.helpers import TickerFetcher, yahoo_api_retry
+from tap_yahooquery.helpers import (
+    TickerFetcher,
+    clean_strings,
+    fix_empty_values,
+    yahoo_api_retry,
+)
 from typing import Union
 from singer_sdk.streams import Stream
 from singer_sdk import Tap
@@ -26,6 +32,7 @@ class YahooQueryStream(Stream, ABC):
     def __init__(self, tap: Tap) -> None:
         super().__init__(tap)
         self._all_tickers = None
+        self._proxy_session = None
 
     def _get_stream_config(self) -> dict:
         """Get configuration for this specific stream."""
@@ -146,12 +153,33 @@ class YahooQueryStream(Stream, ABC):
 
         return ticker
 
+    def _get_proxy(self) -> Union[str, None]:
+        """Get a proxy from the configured proxy list, rotating per call."""
+        proxies = self.config.get("proxies", [])
+        if not proxies:
+            return None
+        if isinstance(proxies, str):
+            return proxies
+        return random.choice(proxies)
+
+    def _make_ticker(self, symbol: str) -> yq.Ticker:
+        """Create a yahooquery Ticker with optional proxy rotation."""
+        proxy = self._get_proxy()
+        if proxy:
+            if self._proxy_session is None:
+                from curl_cffi import requests as cffi_requests
+
+                self._proxy_session = cffi_requests.Session()
+            self._proxy_session.proxies = {"http": proxy, "https": proxy}
+            return yq.Ticker(symbol, session=self._proxy_session)
+        return yq.Ticker(symbol)
+
     @yahoo_api_retry
     def _fetch_with_crumb_retry(
         self, ticker: str, method_name: str, is_callable: bool = True, **kwargs
     ) -> Union[dict, pd.DataFrame]:
         """Centralized Yahoo API call with crumb retry logic."""
-        ticker_obj = yq.Ticker(ticker)
+        ticker_obj = self._make_ticker(ticker)
         method = getattr(ticker_obj, method_name)
 
         if is_callable:
@@ -165,17 +193,11 @@ class YahooQueryStream(Stream, ABC):
         if isinstance(data, dict) and "Invalid Crumb" in str(data):
             self.logger.warning(f"Invalid crumb for {ticker}, retrying {method_name}")
             ticker_obj.session.close()
-            ticker_obj._session = None
-            ticker_obj.crumb = None
-            ticker_obj.cookie = None
-            if hasattr(ticker_obj, "_session"):
-                ticker_obj._session = None
-            if hasattr(ticker_obj, "session"):
-                ticker_obj.session.close()
+            self._proxy_session = None  # force new session on retry
 
             time.sleep(3)
 
-            ticker_obj = yq.Ticker(ticker)
+            ticker_obj = self._make_ticker(ticker)
             method = getattr(ticker_obj, method_name)
 
             if is_callable:
@@ -201,6 +223,62 @@ class YahooQueryStream(Stream, ABC):
         """Generate a UUID surrogate key from specified columns."""
         key = "".join([f"{str(row[col])}|{col}|" for col in cols if col in row])
         return uuid5(NAMESPACE_DNS, key)
+
+    def _make_dict_transform(
+        self,
+        ticker,
+        exclude_nested=False,
+        exclude_fields=None,
+        extra_renames=None,
+    ):
+        """Create a standard dict→record transform closure for _get_dict_records."""
+
+        def transform(data):
+            record = dict(data[ticker])  # shallow copy to avoid mutating source
+            record["ticker"] = ticker
+            # Apply explicit renames before clean_strings to control output names
+            if extra_renames:
+                for old_key, new_key in extra_renames.items():
+                    if old_key in record:
+                        record[new_key] = record.pop(old_key)
+            keys = list(record.keys())
+            cleaned_keys = clean_strings(keys)
+            cleaned = {}
+            for orig_key, clean_key in zip(keys, cleaned_keys):
+                if exclude_fields and orig_key in exclude_fields:
+                    continue
+                if exclude_nested and isinstance(record[orig_key], (list, dict)):
+                    continue
+                cleaned[clean_key] = record[orig_key]
+            cleaned = fix_empty_values(pd.DataFrame([cleaned])).to_dict("records")[0]
+            yield cleaned
+
+        return transform
+
+    def _make_df_transform(
+        self, extra_renames=None, date_columns=None, drop_columns=None
+    ):
+        """Create a standard DataFrame→records transform closure for _get_dataframe_records."""
+
+        def transform(data):
+            if data.empty:
+                return
+            df = data.reset_index().rename(columns={"symbol": "ticker"})
+            if extra_renames:
+                df = df.rename(columns=extra_renames)
+            if drop_columns:
+                df = df.drop(columns=[c for c in drop_columns if c in df.columns])
+            df.columns = clean_strings(df.columns)
+            if date_columns:
+                for col, fmt in date_columns.items():
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime(
+                            fmt
+                        )
+            df = fix_empty_values(df)
+            yield from df.to_dict(orient="records")
+
+        return transform
 
     def _get_dataframe_records(
         self,

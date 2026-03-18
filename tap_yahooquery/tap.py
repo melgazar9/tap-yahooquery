@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pathlib
+import warnings
+
 from singer_sdk import Tap
 from singer_sdk import typing as th
+from singer_sdk.helpers._util import read_json_file
 
 import typing as t
 from tap_yahooquery.streams import (
@@ -27,6 +31,19 @@ from tap_yahooquery.streams import (
     EarningsTrendStream,
     EarningsStream,
     # NewsStream,
+    CashFlowStream,
+    PriceHistoryStream,
+    SummaryDetailStream,
+    AssetProfileStream,
+    FinancialDataStream,
+    GradingHistoryStream,
+    ValuationMeasuresStream,
+    InsiderHoldersStream,
+    OptionChainStream,
+    PriceStream,
+    SharePurchaseActivityStream,
+    SummaryProfileStream,
+    TechnicalEventsStream,
 )
 
 
@@ -37,6 +54,12 @@ class TapYahooQuery(Tap):
 
     _cached_tickers: t.List[dict] | None = None
     _tickers_stream_instance: TickersStream | None = None
+
+    def __init__(self, *args, catalog=None, **kwargs):
+        """Convert catalog file path to dict to avoid SDK deprecation warning."""
+        if isinstance(catalog, (str, pathlib.PurePath)):
+            catalog = read_json_file(catalog)
+        super().__init__(*args, catalog=catalog, **kwargs)
 
     config_jsonschema = th.PropertiesList(
         th.Property(
@@ -54,6 +77,16 @@ class TapYahooQuery(Tap):
             ),
             description="Ticker configuration including selection and query params",
             required=True,
+        ),
+        th.Property(
+            "proxies",
+            th.OneOf(th.StringType, th.ArrayType(th.StringType)),
+            description=(
+                "Proxy URL(s) for rotating IPs. "
+                "Single string for one proxy or auto-rotating provider, "
+                "list for round-robin rotation. "
+                "Format: http://user:pass@host:port or socks5://host:port"
+            ),
         ),
         th.Property(
             "sec_filings",
@@ -115,6 +148,19 @@ class TapYahooQuery(Tap):
             EarningsTrendStream(self),
             EarningsStream(self),
             # NewsStream(self),
+            CashFlowStream(self),
+            PriceHistoryStream(self),
+            SummaryDetailStream(self),
+            AssetProfileStream(self),
+            FinancialDataStream(self),
+            GradingHistoryStream(self),
+            ValuationMeasuresStream(self),
+            InsiderHoldersStream(self),
+            OptionChainStream(self),
+            PriceStream(self),
+            SharePurchaseActivityStream(self),
+            SummaryProfileStream(self),
+            TechnicalEventsStream(self),
         ]
 
 
