@@ -661,7 +661,9 @@ ALL_FINANCIAL_DATA_SCHEMA = th.PropertiesList(
     th.Property("other_gand_a", th.NumberType),
     th.Property("other_intangible_assets", th.NumberType),
     th.Property("other_payable", th.NumberType),
-    th.Property("pensionand_other_post_retirement_benefit_plans_current", th.NumberType),
+    th.Property(
+        "pensionand_other_post_retirement_benefit_plans_current", th.NumberType
+    ),
     th.Property("preferred_stock", th.NumberType),
     th.Property("prepaid_assets", th.NumberType),
     th.Property("proceeds_from_stock_option_exercised", th.NumberType),

@@ -247,14 +247,17 @@ class CorporateEventsStream(BaseFinancialStream):
 
     def _fetch_corporate_events(self, ticker: str) -> pd.DataFrame:
         """Fetch corporate events."""
-        data = self._fetch_with_crumb_retry(ticker, "corporate_events", is_callable=False)
+        data = self._fetch_with_crumb_retry(
+            ticker, "corporate_events", is_callable=False
+        )
         if not isinstance(data, pd.DataFrame):
             self.logger.warning(f"No valid corporate_events data for {ticker}")
             return pd.DataFrame()
 
         df = fix_empty_values(data.reset_index())
         df = df.rename(columns={"symbol": "ticker"})
-        df["significance"] = df["significance"].astype(int)
+        if "significance" in df.columns:
+            df["significance"] = df["significance"].astype(int)
         df.columns = clean_strings(df.columns)
         df["date"] = df["date"].dt.strftime("%Y-%m-%d")
         return df
@@ -303,7 +306,7 @@ class CalendarEventsStream(BaseFinancialStream):
             ticker, "calendar_events", is_callable=False
         )
 
-        if not data or ticker not in data:
+        if not isinstance(data, dict) or ticker not in data:
             return pd.DataFrame()
 
         return self._normalize_calendar_events(ticker, data)
@@ -443,7 +446,8 @@ class CorporateGuidanceStream(BaseFinancialStream):
         def transform(df):
             df = df.reset_index().rename(columns={"symbol": "ticker"})
             df.columns = clean_strings(df.columns)
-            df["significance"] = df["significance"].astype(int)
+            if "significance" in df.columns:
+                df["significance"] = df["significance"].astype(int)
             df = fix_empty_values(df)
             yield from df.to_dict("records")
 
@@ -622,6 +626,7 @@ class RecommendationTrendStream(BaseFinancialStream):
         """Get recommendation trend records."""
         ticker = self._get_ticker_from_context(context)
         self.logger.info(f"Processing recommendation trend for ticker: {ticker}")
+
         def transform(df):
             df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
             df = df.reset_index(drop=True)
@@ -714,7 +719,9 @@ class KeyStatsStream(BaseFinancialStream):
             )[0]
             yield cleaned_stats
 
-        yield from self._get_dict_records(ticker, "key_stats", transform, is_callable=False)
+        yield from self._get_dict_records(
+            ticker, "key_stats", transform, is_callable=False
+        )
 
 
 class BalanceSheetStream(BaseFinancialStream):
@@ -882,6 +889,7 @@ class InstitutionOwnershipStream(BaseFinancialStream):
         """Get institution ownership records."""
         ticker = self._get_ticker_from_context(context)
         self.logger.info(f"Processing institution ownership for ticker: {ticker}")
+
         def transform(df):
             df = df.reset_index(level=0).rename(columns={"symbol": "ticker"})
             df = df.reset_index(drop=True)
@@ -938,7 +946,9 @@ class MajorHoldersStream(BaseFinancialStream):
             )[0]
             yield cleaned_holders
 
-        yield from self._get_dict_records(ticker, "major_holders", transform, is_callable=False)
+        yield from self._get_dict_records(
+            ticker, "major_holders", transform, is_callable=False
+        )
 
 
 class EsgScoresStream(BaseFinancialStream):
@@ -1033,10 +1043,14 @@ class EsgScoresStream(BaseFinancialStream):
             for key, value in esg.items():
                 cleaned_key = clean_strings([key])[0]
                 cleaned_esg[cleaned_key] = value
-            cleaned_esg = fix_empty_values(pd.DataFrame([cleaned_esg])).to_dict("records")[0]
+            cleaned_esg = fix_empty_values(pd.DataFrame([cleaned_esg])).to_dict(
+                "records"
+            )[0]
             yield cleaned_esg
 
-        yield from self._get_dict_records(ticker, "esg_scores", transform, is_callable=False)
+        yield from self._get_dict_records(
+            ticker, "esg_scores", transform, is_callable=False
+        )
 
 
 class EarningsStream(YahooQueryStream):
@@ -1070,7 +1084,7 @@ class EarningsStream(YahooQueryStream):
 
     def _fetch_earnings(self, ticker: str) -> pd.DataFrame:
         data = self._fetch_with_crumb_retry(ticker, "earnings", is_callable=False)
-        if not data or ticker not in data:
+        if not isinstance(data, dict) or ticker not in data:
             self.logger.warning(f"No earnings data found for ticker: {ticker}")
             return pd.DataFrame()
 
@@ -1272,7 +1286,9 @@ class EarningsTrendStream(YahooQueryStream):
         records = []
         for ticker, ticker_data in data.items():
             if not isinstance(ticker_data, dict):
-                self.logger.warning(f"Invalid earnings_trend data for ticker {ticker}: {ticker_data}")
+                self.logger.warning(
+                    f"Invalid earnings_trend data for ticker {ticker}: {ticker_data}"
+                )
                 continue
             for trend in ticker_data.get("trend", []):
                 record = {

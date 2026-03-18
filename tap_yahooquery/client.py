@@ -202,7 +202,14 @@ class YahooQueryStream(Stream, ABC):
         key = "".join([f"{str(row[col])}|{col}|" for col in cols if col in row])
         return uuid5(NAMESPACE_DNS, key)
 
-    def _get_dataframe_records(self, ticker: str, method_name: str, transformer, is_callable: bool = True, **kwargs):
+    def _get_dataframe_records(
+        self,
+        ticker: str,
+        method_name: str,
+        transformer,
+        is_callable: bool = True,
+        **kwargs,
+    ):
         """Fetch, validate dataframe, and yield transformed records. Returns nothing if invalid."""
         data = self._fetch_with_crumb_retry(ticker, method_name, is_callable, **kwargs)
         if not isinstance(data, pd.DataFrame):
@@ -210,10 +217,21 @@ class YahooQueryStream(Stream, ABC):
             return
         yield from transformer(data)
 
-    def _get_dict_records(self, ticker: str, method_name: str, transformer, is_callable: bool = True, **kwargs):
+    def _get_dict_records(
+        self,
+        ticker: str,
+        method_name: str,
+        transformer,
+        is_callable: bool = True,
+        **kwargs,
+    ):
         """Fetch, validate dict, and yield transformed records. Returns nothing if invalid."""
         data = self._fetch_with_crumb_retry(ticker, method_name, is_callable, **kwargs)
-        if not isinstance(data, dict) or ticker not in data or not isinstance(data[ticker], dict):
+        if (
+            not isinstance(data, dict)
+            or ticker not in data
+            or not isinstance(data[ticker], dict)
+        ):
             self.logger.warning(f"No valid {method_name} data for {ticker}")
             return
         yield from transformer(data)
